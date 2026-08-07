@@ -27,8 +27,9 @@ import { BoxRepository } from '../../box/repositories/box.repository'
 
 @Injectable()
 export class UsageService implements TrackableJobExecutions, OnApplicationShutdown {
-  activeJobs = new Set<string>()
+  activeJobs = new Set<symbol>()
   private readonly logger = new Logger(UsageService.name)
+  private readonly shutdownController = new AbortController()
 
   constructor(
     @InjectRepository(BoxUsagePeriod)
@@ -38,6 +39,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   ) {}
 
   async onApplicationShutdown() {
+    this.shutdownController.abort(new Error('UsageService is shutting down'))
     //  wait for all active jobs to finish
     while (this.activeJobs.size > 0) {
       this.logger.log(`Waiting for ${this.activeJobs.size} active jobs to finish`)
@@ -255,11 +257,11 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   }
 
   private async waitForLock(boxId: string): Promise<RedisLockLease> {
-    let lease: RedisLockLease | null
-    while (!(lease = await this.acquireLease(boxId))) {
-      await new Promise((resolve) => setTimeout(resolve, 500))
-    }
-    return lease
+    return this.redisLockProvider.waitForLock(`usage-period-${boxId}`, 60, {
+      signal: this.shutdownController.signal,
+      timeoutMs: 60_000,
+      retryDelayMs: 500,
+    })
   }
 
   private async acquireLease(boxId: string): Promise<RedisLockLease | null> {

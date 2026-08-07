@@ -27,7 +27,7 @@ const VOLUME_STATE_LOCK_KEY = 'volume-state-'
 export class VolumeManager
   implements OnModuleInit, TrackableJobExecutions, OnApplicationShutdown, OnApplicationBootstrap
 {
-  activeJobs = new Set<string>()
+  activeJobs = new Set<symbol>()
 
   private readonly logger = new Logger(VolumeManager.name)
   private processingVolumes: Set<string> = new Set()

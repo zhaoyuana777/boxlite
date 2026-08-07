@@ -43,7 +43,7 @@ import { Box } from '../entities/box.entity'
 
 @Injectable()
 export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown {
-  activeJobs = new Set<string>()
+  activeJobs = new Set<symbol>()
 
   private readonly logger = new Logger(BoxManager.name)
 

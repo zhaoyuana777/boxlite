@@ -193,4 +193,70 @@ describe('RedisLockProvider owned locks', () => {
     )
     jest.useRealTimers()
   })
+
+  it('stops waiting when lock acquisition times out', async () => {
+    jest.useFakeTimers()
+    const redis = { set: jest.fn().mockResolvedValue(null) }
+    const provider = new RedisLockProvider(redis as any)
+
+    const waiting = provider.waitForLock('busy-lock', 60, { timeoutMs: 100, retryDelayMs: 25 })
+    const rejected = expect(waiting).rejects.toThrow('Timed out waiting for Redis lock busy-lock')
+    await jest.advanceTimersByTimeAsync(100)
+
+    await rejected
+  })
+
+  it('stops waiting when the caller aborts', async () => {
+    jest.useFakeTimers()
+    const redis = { set: jest.fn().mockResolvedValue(null) }
+    const provider = new RedisLockProvider(redis as any)
+    const controller = new AbortController()
+
+    const waiting = provider.waitForLock('busy-lock', 60, { signal: controller.signal })
+    const rejected = expect(waiting).rejects.toThrow('service is shutting down')
+    controller.abort(new Error('service is shutting down'))
+    await jest.runOnlyPendingTimersAsync()
+
+    await rejected
+  })
+
+  it('releases a lease acquired after the caller aborts', async () => {
+    const provider = new RedisLockProvider({} as any)
+    const controller = new AbortController()
+    const lease = { release: jest.fn().mockResolvedValue(undefined) }
+    let finishAcquire!: (lease: any) => void
+    jest.spyOn(provider, 'acquireLease').mockReturnValue(
+      new Promise((resolve) => {
+        finishAcquire = resolve
+      }),
+    )
+
+    const waiting = provider.waitForLock('busy-lock', 60, { signal: controller.signal })
+    const rejected = expect(waiting).rejects.toThrow('service is shutting down')
+    controller.abort(new Error('service is shutting down'))
+    finishAcquire(lease)
+
+    await rejected
+    expect(lease.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases a lease acquired after the wait deadline', async () => {
+    jest.useFakeTimers()
+    const provider = new RedisLockProvider({} as any)
+    const lease = { release: jest.fn().mockResolvedValue(undefined) }
+    let finishAcquire!: (lease: any) => void
+    jest.spyOn(provider, 'acquireLease').mockReturnValue(
+      new Promise((resolve) => {
+        finishAcquire = resolve
+      }),
+    )
+
+    const waiting = provider.waitForLock('busy-lock', 60, { timeoutMs: 100 })
+    const rejected = expect(waiting).rejects.toThrow('Timed out waiting for Redis lock busy-lock')
+    await jest.advanceTimersByTimeAsync(100)
+    finishAcquire(lease)
+
+    await rejected
+    expect(lease.release).toHaveBeenCalledTimes(1)
+  })
 })
