@@ -73,7 +73,7 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
 
   const service = new UsageService(usagePeriodRepository as any, redisLockProvider as any, boxRepository as any)
 
-  return { service, usagePeriodRepository, redisLockProvider }
+  return { service, usagePeriodRepository, redisLockProvider, boxRepository }
 }
 
 const OTHER_BOX_ID = 'box-2'
@@ -123,7 +123,7 @@ describe('UsageService.handleBoxStateUpdate', () => {
   })
 
   it('opens a full-resource period when the box starts', async () => {
-    const { service, usagePeriodRepository } = makeService()
+    const { service, usagePeriodRepository, boxRepository } = makeService()
 
     await service.handleBoxStateUpdate(event(BoxState.STARTED))
 
@@ -283,6 +283,80 @@ describe('UsageService.handleBoxStateUpdate', () => {
 })
 
 describe('UsageService cron lock cleanup', () => {
+  const runRollover = async (state: BoxState, currentResources: Partial<BoxUsagePeriod>) => {
+    const { service, usagePeriodRepository, boxRepository } = makeService()
+    const currentPeriod = Object.assign(new BoxUsagePeriod(), {
+      boxId: box.id,
+      organizationId: box.organizationId,
+      region: box.region,
+      cpu: 8,
+      gpu: 2,
+      mem: 16,
+      disk: 20,
+      startAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+      endAt: null,
+      ...currentResources,
+    })
+    const saved: BoxUsagePeriod[] = []
+
+    usagePeriodRepository.find.mockResolvedValue([currentPeriod])
+    boxRepository.findOne.mockResolvedValue({
+      ...box,
+      state,
+      cpu: 4,
+      gpu: 1,
+      mem: 8,
+      disk: 12,
+    })
+    usagePeriodRepository.manager.transaction.mockImplementation(async (callback: (manager: any) => Promise<void>) =>
+      callback({ save: jest.fn(async (period) => saved.push(period)) }),
+    )
+
+    await service.closeAndReopenUsagePeriods()
+
+    return saved[1]
+  }
+
+  it.each([BoxState.STOPPING, BoxState.STOPPED])('keeps %s rollovers disk-only using current disk size', async (state) => {
+    const reopened = await runRollover(state, {})
+
+    expect(reopened).toEqual(expect.objectContaining({ cpu: 0, gpu: 0, mem: 0, disk: 12, endAt: null }))
+  })
+
+  it('uses the current box resources when a STARTED period rolls over', async () => {
+    const reopened = await runRollover(BoxState.STARTED, {})
+
+    expect(reopened).toEqual(expect.objectContaining({ cpu: 4, gpu: 1, mem: 8, disk: 12, endAt: null }))
+  })
+
+  it('preserves a disk-only period while a stopped box is STARTING', async () => {
+    const existingResources = { cpu: 0, gpu: 0, mem: 0, disk: 20 }
+    const reopened = await runRollover(BoxState.STARTING, existingResources)
+
+    expect(reopened).toEqual(expect.objectContaining({ ...existingResources, endAt: null }))
+  })
+
+  it.each([
+    BoxState.CREATING,
+    BoxState.RESTORING,
+    BoxState.STARTING,
+    BoxState.UNKNOWN,
+    BoxState.ARCHIVING,
+    BoxState.RESIZING,
+  ])('preserves the existing resource shape while a box is %s', async (state) => {
+    const existingResources = { cpu: 8, gpu: 2, mem: 16, disk: 20 }
+    const reopened = await runRollover(state, existingResources)
+
+    expect(reopened).toEqual(expect.objectContaining({ ...existingResources, endAt: null }))
+  })
+
+  it.each([BoxState.ERROR, BoxState.ARCHIVED, BoxState.DESTROYING, BoxState.DESTROYED])(
+    'closes without reopening when a box is %s',
+    async (state) => {
+      expect(await runRollover(state, {})).toBeUndefined()
+    },
+  )
+
   it('rolls back archival when ownership is lost after its writes', async () => {
     const { service, usagePeriodRepository, redisLockProvider } = makeService()
     const controller = new AbortController()

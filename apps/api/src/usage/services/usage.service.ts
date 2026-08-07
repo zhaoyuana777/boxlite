@@ -24,6 +24,40 @@ import { setTimeout as sleep } from 'timers/promises'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { BoxRepository } from '../../box/repositories/box.repository'
+import { Box } from '../../box/entities/box.entity'
+
+enum UsageRolloverPolicy {
+  CURRENT_RESOURCES,
+  DISK_ONLY,
+  PRESERVE_EXISTING,
+  CLOSE,
+}
+
+const usageRolloverPolicy = (state: BoxState): UsageRolloverPolicy => {
+  switch (state) {
+    case BoxState.STARTED:
+      return UsageRolloverPolicy.CURRENT_RESOURCES
+    case BoxState.STOPPING:
+    case BoxState.STOPPED:
+      return UsageRolloverPolicy.DISK_ONLY
+    case BoxState.CREATING:
+    case BoxState.RESTORING:
+    case BoxState.STARTING:
+    case BoxState.UNKNOWN:
+    case BoxState.ARCHIVING:
+    case BoxState.RESIZING:
+      return UsageRolloverPolicy.PRESERVE_EXISTING
+    case BoxState.ERROR:
+    case BoxState.ARCHIVED:
+    case BoxState.DESTROYING:
+    case BoxState.DESTROYED:
+      return UsageRolloverPolicy.CLOSE
+    default: {
+      const unhandledState: never = state
+      throw new Error(`Unhandled box state for usage rollover: ${unhandledState}`)
+    }
+  }
+}
 
 @Injectable()
 export class UsageService implements TrackableJobExecutions, OnApplicationShutdown {
@@ -191,18 +225,14 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
             usagePeriod.endAt = closeTime
             await transactionalEntityManager.save(usagePeriod)
 
-            if (
-              box &&
-              (box.state === BoxState.STARTED || box.state === BoxState.STOPPED || box.state === BoxState.STOPPING)
-            ) {
-              const newUsagePeriod = BoxUsagePeriod.fromUsagePeriod(usagePeriod)
+            if (box) {
+              const newUsagePeriod = this.buildRolloverUsagePeriod(usagePeriod, box)
+              if (!newUsagePeriod) {
+                boxSignal.throwIfAborted()
+                return
+              }
               newUsagePeriod.startAt = closeTime
               newUsagePeriod.endAt = null
-              if (box.state === BoxState.STOPPED) {
-                newUsagePeriod.cpu = 0
-                newUsagePeriod.gpu = 0
-                newUsagePeriod.mem = 0
-              }
               await transactionalEntityManager.save(newUsagePeriod)
             }
             boxSignal.throwIfAborted()
@@ -264,6 +294,27 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
 
   private async acquireLease(boxId: string): Promise<RedisLockLease | null> {
     return this.redisLockProvider.acquireLease(`usage-period-${boxId}`, 60)
+  }
+
+  private buildRolloverUsagePeriod(usagePeriod: BoxUsagePeriod, box: Box): BoxUsagePeriod | null {
+    const policy = usageRolloverPolicy(box.state)
+    if (policy === UsageRolloverPolicy.CLOSE) {
+      return null
+    }
+
+    const newUsagePeriod = BoxUsagePeriod.fromUsagePeriod(usagePeriod)
+    if (policy === UsageRolloverPolicy.CURRENT_RESOURCES) {
+      newUsagePeriod.cpu = box.cpu
+      newUsagePeriod.gpu = box.gpu
+      newUsagePeriod.mem = box.mem
+      newUsagePeriod.disk = box.disk
+    } else if (policy === UsageRolloverPolicy.DISK_ONLY) {
+      newUsagePeriod.cpu = 0
+      newUsagePeriod.gpu = 0
+      newUsagePeriod.mem = 0
+      newUsagePeriod.disk = box.disk
+    }
+    return newUsagePeriod
   }
 
   private withLease<T>(lease: RedisLockLease, operation: (signal: AbortSignal) => Promise<T>, context: string) {
