@@ -40,7 +40,7 @@ export class BoxActivityService {
    */
   async updateLastActivityAt(boxId: string, lastActivityAt: Date): Promise<void> {
     const lockKey = `box:update-last-activity:${boxId}`
-    const acquired = await this.redisLockProvider.lock(
+    const acquired = await this.redisLockProvider.lockUntilExpiry(
       lockKey,
       this.configService.getOrThrow('boxActivity.throttleTtlSeconds'),
     )
@@ -78,8 +78,8 @@ export class BoxActivityService {
   async flushActivityToDb(): Promise<void> {
     const lockKey = 'flush-activity-to-db-lock'
     const lockTtl = 30
-    const acquired = await this.redisLockProvider.lock(lockKey, lockTtl)
-    if (!acquired) {
+    const lease = await this.redisLockProvider.acquireLease(lockKey, lockTtl)
+    if (!lease) {
       return
     }
 
@@ -117,7 +117,7 @@ export class BoxActivityService {
     } catch (error) {
       this.logger.error('Error flushing activity timestamps to the database:', error)
     } finally {
-      await this.redisLockProvider.unlock(lockKey)
+      await lease.release()
     }
   }
 

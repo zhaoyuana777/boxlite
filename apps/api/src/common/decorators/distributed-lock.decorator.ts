@@ -36,14 +36,14 @@ export function DistributedLock(options?: DistributedLockOptions): MethodDecorat
       // Set default TTL if not provided
       const lockTtlMs = options?.lockTtl || 30 // 30 seconds default
 
-      const hasLock = await redisLockProvider.lock(lockKey, lockTtlMs)
-      if (!hasLock) {
+      const lease = await redisLockProvider.acquireLease(lockKey, lockTtlMs)
+      if (!lease) {
         return
       }
       try {
         return await originalMethod.apply(this, args)
       } finally {
-        await redisLockProvider.unlock(lockKey)
+        await lease.release()
       }
     }
   }

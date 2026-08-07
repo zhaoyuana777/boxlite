@@ -141,7 +141,7 @@ export class OrganizationUsageService {
     }
 
     const lockKey = `org:${organizationId}:fetch-box-usage`
-    await this.redisLockProvider.waitForLock(lockKey, 60)
+    const lease = await this.redisLockProvider.waitForLock(lockKey, 60)
     try {
       const recheck = await this.getCachedBoxUsage(organizationId)
       if (recheck) {
@@ -153,7 +153,7 @@ export class OrganizationUsageService {
       const overview: BoxUsageOverview = { ...current, ...pending }
       return excludeBoxId ? await this.excludeBoxFromUsage(overview, excludeBoxId) : overview
     } finally {
-      await this.redisLockProvider.unlock(lockKey)
+      await lease.release()
     }
   }
 
@@ -375,7 +375,7 @@ export class OrganizationUsageService {
   async handleBoxCreated(event: BoxCreatedEvent): Promise<void> {
     const box = event.box
     const lockKey = `box:${box.id}:quota-usage-update`
-    await this.redisLockProvider.waitForLock(lockKey, 60)
+    const lease = await this.redisLockProvider.waitForLock(lockKey, 60)
     try {
       await this.updateCurrentQuotaUsage(box.organizationId, 'cpu', box.cpu)
       await this.updateCurrentQuotaUsage(box.organizationId, 'memory', box.mem)
@@ -385,7 +385,7 @@ export class OrganizationUsageService {
     } catch (error) {
       this.logger.warn(`Error updating cached box quota usage for organization ${box.organizationId}: ${error}`)
     } finally {
-      await this.redisLockProvider.unlock(lockKey)
+      await lease.release()
     }
   }
 
@@ -393,7 +393,7 @@ export class OrganizationUsageService {
   async handleBoxStateUpdated(event: BoxStateUpdatedEvent): Promise<void> {
     const box = event.box
     const lockKey = `box:${box.id}:quota-usage-update`
-    await this.redisLockProvider.waitForLock(lockKey, 60)
+    const lease = await this.redisLockProvider.waitForLock(lockKey, 60)
     try {
       // Warm-pool assignment re-emits STARTED -> STARTED to attribute an already
       // running box to its new organization; the membership deltas would be zero.
@@ -420,7 +420,7 @@ export class OrganizationUsageService {
     } catch (error) {
       this.logger.warn(`Error updating cached box quota usage for organization ${box.organizationId}: ${error}`)
     } finally {
-      await this.redisLockProvider.unlock(lockKey)
+      await lease.release()
     }
   }
 

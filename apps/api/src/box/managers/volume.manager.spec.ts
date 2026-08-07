@@ -88,3 +88,46 @@ describe('VolumeManager S3 client setup', () => {
     )
   })
 })
+
+describe('VolumeManager owned volume locks', () => {
+  it('does not overwrite the lease owner token while processing a volume', async () => {
+    mockSend.mockResolvedValue({})
+    const volume = {
+      id: 'volume-1',
+      organizationId: 'org-1',
+      state: 'pending_create',
+      getBucketName: () => 'bucket-1',
+    }
+    const volumeRepository = {
+      find: jest.fn().mockResolvedValue([volume]),
+      save: jest.fn().mockResolvedValue(undefined),
+    }
+    const configService = {
+      get: jest.fn((key: string) =>
+        ({
+          's3.endpoint': 'https://s3.example.com',
+          's3.region': 'us-east-1',
+          skipConnections: true,
+        })[key],
+      ),
+      getOrThrow: jest.fn((key: string) =>
+        ({ 's3.endpoint': 'https://s3.example.com', 's3.region': 'us-east-1' })[key],
+      ),
+    }
+    const redis = { setex: jest.fn() }
+    const redisLockProvider = {
+      acquireLease: jest.fn().mockResolvedValue({ release: jest.fn() }),
+    }
+    const manager = new VolumeManager(
+      volumeRepository as any,
+      configService as any,
+      redis as any,
+      redisLockProvider as any,
+      {} as any,
+    )
+
+    await manager.processPendingVolumes()
+
+    expect(redis.setex).not.toHaveBeenCalled()
+  })
+})

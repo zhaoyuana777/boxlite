@@ -117,7 +117,7 @@ export class BoxWarmPoolService {
       let warmPoolBox: Box | null = null
       for (const box of warmPoolBoxes) {
         const lockKey = `box-warm-pool-${box.id}`
-        if (!(await this.redisLockProvider.lock(lockKey, 10))) {
+        if (!(await this.redisLockProvider.lockUntilExpiry(lockKey, 10))) {
           continue
         }
 
@@ -144,43 +144,46 @@ export class BoxWarmPoolService {
     await Promise.all(
       warmPoolItems.map(async (warmPoolItem) => {
         const lockKey = `warm-pool-lock-${warmPoolItem.id}`
-        if (!(await this.redisLockProvider.lock(lockKey, 720))) {
+        const lease = await this.redisLockProvider.acquireLease(lockKey, 720)
+        if (!lease) {
           return
         }
 
-        const boxCount = await this.boxRepository.count({
-          where: {
-            organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
-            image: warmPoolItem.image,
-            class: warmPoolItem.class,
-            osUser: warmPoolItem.osUser,
-            env: warmPoolItem.env,
-            region: warmPoolItem.target,
-            cpu: warmPoolItem.cpu,
-            gpu: warmPoolItem.gpu,
-            mem: warmPoolItem.mem,
-            disk: warmPoolItem.disk,
-            desiredState: BoxDesiredState.STARTED,
-            state: Not(In([BoxState.ERROR])),
-          },
-        })
+        try {
+          const boxCount = await this.boxRepository.count({
+            where: {
+              organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+              image: warmPoolItem.image,
+              class: warmPoolItem.class,
+              osUser: warmPoolItem.osUser,
+              env: warmPoolItem.env,
+              region: warmPoolItem.target,
+              cpu: warmPoolItem.cpu,
+              gpu: warmPoolItem.gpu,
+              mem: warmPoolItem.mem,
+              disk: warmPoolItem.disk,
+              desiredState: BoxDesiredState.STARTED,
+              state: Not(In([BoxState.ERROR])),
+            },
+          })
 
-        const missingCount = warmPoolItem.pool - boxCount
-        if (missingCount > 0) {
-          const promises = []
-          this.logger.debug(`Creating ${missingCount} boxes for warm pool id ${warmPoolItem.id}`)
+          const missingCount = warmPoolItem.pool - boxCount
+          if (missingCount > 0) {
+            const promises = []
+            this.logger.debug(`Creating ${missingCount} boxes for warm pool id ${warmPoolItem.id}`)
 
-          for (let i = 0; i < missingCount; i++) {
-            promises.push(
-              this.eventEmitter.emitAsync(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem)),
-            )
+            for (let i = 0; i < missingCount; i++) {
+              promises.push(
+                this.eventEmitter.emitAsync(WarmPoolEvents.TOPUP_REQUESTED, new WarmPoolTopUpRequested(warmPoolItem)),
+              )
+            }
+
+            // Wait for all promises to settle before releasing the lock. Otherwise, another worker could start creating boxes
+            await Promise.allSettled(promises)
           }
-
-          // Wait for all promises to settle before releasing the lock. Otherwise, another worker could start creating boxes
-          await Promise.allSettled(promises)
+        } finally {
+          await lease.release()
         }
-
-        await this.redisLockProvider.unlock(lockKey)
       }),
     )
   }

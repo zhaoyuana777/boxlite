@@ -58,7 +58,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
 
   const serviceForBoxState = (state: BoxState) =>
     new UsageService(periods, new RedisLockProvider(redis), {
-      findOne: async () => ({ id: box.id, state }),
+      findOne: async () => ({ ...box, state }),
     } as any)
 
   const quoted = TABLES.map((table) => `"${table}"`).join(', ')

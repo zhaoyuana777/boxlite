@@ -482,8 +482,8 @@ export class RunnerService {
   @WithInstrumentation()
   private async handleCheckRunners() {
     const lockKey = 'check-runners'
-    const hasLock = await this.redisLockProvider.lock(lockKey, 60)
-    if (!hasLock) {
+    const lease = await this.redisLockProvider.acquireLease(lockKey, 60)
+    if (!lease) {
       return
     }
 
@@ -594,7 +594,7 @@ export class RunnerService {
         }),
       )
     } finally {
-      await this.redisLockProvider.unlock(lockKey)
+      await lease.release()
     }
   }
 
@@ -642,8 +642,8 @@ export class RunnerService {
   @WithInstrumentation()
   private async handleCheckDecommissionRunners() {
     const lockKey = 'check-decommission-runners'
-    const hasLock = await this.redisLockProvider.lock(lockKey, 60)
-    if (!hasLock) {
+    const lease = await this.redisLockProvider.acquireLease(lockKey, 60)
+    if (!lease) {
       return
     }
 
@@ -701,7 +701,7 @@ export class RunnerService {
         }),
       )
     } finally {
-      await this.redisLockProvider.unlock(lockKey)
+      await lease.release()
     }
   }
 
