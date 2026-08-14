@@ -27,7 +27,7 @@ export function useBoxLogs(
   const { selectedOrganization } = useSelectedOrganization()
 
   return useQuery<PaginatedLogs>({
-    queryKey: queryKeys.telemetry.logs(boxId ?? '', params),
+    queryKey: queryKeys.telemetry.logs(selectedOrganization?.id ?? '', boxId ?? '', params),
     queryFn: async () => {
       if (!selectedOrganization || !boxId) {
         throw new Error('Missing required parameters')

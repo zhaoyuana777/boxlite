@@ -29,11 +29,53 @@ import type { AdminRunner } from '../models';
 import type { Box } from '../models';
 // @ts-ignore
 import type { CreateRunnerResponse } from '../models';
+// @ts-ignore
+import type { InfrastructureLogs } from '../models';
+// @ts-ignore
+import type { InfrastructureLogsAccessDto } from '../models';
+// @ts-ignore
+import type { PaginatedLogs } from '../models';
 /**
  * AdminApi - axios parameter creator
  */
 export const AdminApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
+        /**
+         * 
+         * @summary Check infrastructure log access
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminCheckInfrastructureLogsAccess: async (options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            const localVarPath = `/admin/infrastructure-logs/access`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
         /**
          * 
          * @summary Create runner
@@ -237,6 +279,169 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Search infrastructure fallback logs
+         * @param {Date} from 
+         * @param {Date} to 
+         * @param {AdminSearchInfrastructureLogsSourceEnum} [source] 
+         * @param {string} [search] Case-sensitive literal phrase to find in a log message
+         * @param {number} [limit] 
+         * @param {string} [nextToken] Opaque CloudWatch pagination cursor
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminSearchInfrastructureLogs: async (from: Date, to: Date, source?: AdminSearchInfrastructureLogsSourceEnum, search?: string, limit?: number, nextToken?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'from' is not null or undefined
+            assertParamExists('adminSearchInfrastructureLogs', 'from', from)
+            // verify required parameter 'to' is not null or undefined
+            assertParamExists('adminSearchInfrastructureLogs', 'to', to)
+            const localVarPath = `/admin/infrastructure-logs`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (source !== undefined) {
+                localVarQueryParameter['source'] = source;
+            }
+
+            if (from !== undefined) {
+                localVarQueryParameter['from'] = (from as any instanceof Date) ?
+                    (from as any).toISOString() :
+                    from;
+            }
+
+            if (to !== undefined) {
+                localVarQueryParameter['to'] = (to as any instanceof Date) ?
+                    (to as any).toISOString() :
+                    to;
+            }
+
+            if (search !== undefined) {
+                localVarQueryParameter['search'] = search;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            if (nextToken !== undefined) {
+                localVarQueryParameter['nextToken'] = nextToken;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Search allowlisted platform OTLP logs
+         * @param {Date} from Start of time range (ISO 8601)
+         * @param {Date} to End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {Array<string>} [severities] Filter by severity levels (DEBUG, INFO, WARN, ERROR)
+         * @param {string} [search] Case-insensitive text search in the log body
+         * @param {AdminSearchPlatformLogsSourceEnum} [source] 
+         * @param {string} [boxId] Exact Box ID. Required when source is box.
+         * @param {string} [traceId] Exact OpenTelemetry trace ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminSearchPlatformLogs: async (from: Date, to: Date, page?: number, limit?: number, severities?: Array<string>, search?: string, source?: AdminSearchPlatformLogsSourceEnum, boxId?: string, traceId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'from' is not null or undefined
+            assertParamExists('adminSearchPlatformLogs', 'from', from)
+            // verify required parameter 'to' is not null or undefined
+            assertParamExists('adminSearchPlatformLogs', 'to', to)
+            const localVarPath = `/admin/infrastructure-logs/platform`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            if (from !== undefined) {
+                localVarQueryParameter['from'] = (from as any instanceof Date) ?
+                    (from as any).toISOString() :
+                    from;
+            }
+
+            if (to !== undefined) {
+                localVarQueryParameter['to'] = (to as any instanceof Date) ?
+                    (to as any).toISOString() :
+                    to;
+            }
+
+            if (page !== undefined) {
+                localVarQueryParameter['page'] = page;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            if (severities) {
+                localVarQueryParameter['severities'] = severities;
+            }
+
+            if (search !== undefined) {
+                localVarQueryParameter['search'] = search;
+            }
+
+            if (source !== undefined) {
+                localVarQueryParameter['source'] = source;
+            }
+
+            if (boxId !== undefined) {
+                localVarQueryParameter['boxId'] = boxId;
+            }
+
+            if (traceId !== undefined) {
+                localVarQueryParameter['traceId'] = traceId;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Update runner scheduling status
          * @param {string} id 
          * @param {*} [options] Override http request option.
@@ -283,6 +488,18 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 export const AdminApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = AdminApiAxiosParamCreator(configuration)
     return {
+        /**
+         * 
+         * @summary Check infrastructure log access
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminCheckInfrastructureLogsAccess(options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<InfrastructureLogsAccessDto>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminCheckInfrastructureLogsAccess(options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminCheckInfrastructureLogsAccess']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
         /**
          * 
          * @summary Create runner
@@ -350,6 +567,45 @@ export const AdminApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Search infrastructure fallback logs
+         * @param {Date} from 
+         * @param {Date} to 
+         * @param {AdminSearchInfrastructureLogsSourceEnum} [source] 
+         * @param {string} [search] Case-sensitive literal phrase to find in a log message
+         * @param {number} [limit] 
+         * @param {string} [nextToken] Opaque CloudWatch pagination cursor
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminSearchInfrastructureLogs(from: Date, to: Date, source?: AdminSearchInfrastructureLogsSourceEnum, search?: string, limit?: number, nextToken?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<InfrastructureLogs>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminSearchInfrastructureLogs(from, to, source, search, limit, nextToken, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminSearchInfrastructureLogs']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Search allowlisted platform OTLP logs
+         * @param {Date} from Start of time range (ISO 8601)
+         * @param {Date} to End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {Array<string>} [severities] Filter by severity levels (DEBUG, INFO, WARN, ERROR)
+         * @param {string} [search] Case-insensitive text search in the log body
+         * @param {AdminSearchPlatformLogsSourceEnum} [source] 
+         * @param {string} [boxId] Exact Box ID. Required when source is box.
+         * @param {string} [traceId] Exact OpenTelemetry trace ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminSearchPlatformLogs(from: Date, to: Date, page?: number, limit?: number, severities?: Array<string>, search?: string, source?: AdminSearchPlatformLogsSourceEnum, boxId?: string, traceId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PaginatedLogs>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminSearchPlatformLogs(from, to, page, limit, severities, search, source, boxId, traceId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminSearchPlatformLogs']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Update runner scheduling status
          * @param {string} id 
          * @param {*} [options] Override http request option.
@@ -370,6 +626,15 @@ export const AdminApiFp = function(configuration?: Configuration) {
 export const AdminApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = AdminApiFp(configuration)
     return {
+        /**
+         * 
+         * @summary Check infrastructure log access
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminCheckInfrastructureLogsAccess(options?: RawAxiosRequestConfig): AxiosPromise<InfrastructureLogsAccessDto> {
+            return localVarFp.adminCheckInfrastructureLogsAccess(options).then((request) => request(axios, basePath));
+        },
         /**
          * 
          * @summary Create runner
@@ -422,6 +687,39 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
+         * @summary Search infrastructure fallback logs
+         * @param {Date} from 
+         * @param {Date} to 
+         * @param {AdminSearchInfrastructureLogsSourceEnum} [source] 
+         * @param {string} [search] Case-sensitive literal phrase to find in a log message
+         * @param {number} [limit] 
+         * @param {string} [nextToken] Opaque CloudWatch pagination cursor
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminSearchInfrastructureLogs(from: Date, to: Date, source?: AdminSearchInfrastructureLogsSourceEnum, search?: string, limit?: number, nextToken?: string, options?: RawAxiosRequestConfig): AxiosPromise<InfrastructureLogs> {
+            return localVarFp.adminSearchInfrastructureLogs(from, to, source, search, limit, nextToken, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Search allowlisted platform OTLP logs
+         * @param {Date} from Start of time range (ISO 8601)
+         * @param {Date} to End of time range (ISO 8601)
+         * @param {number} [page] Page number (1-indexed)
+         * @param {number} [limit] Number of items per page
+         * @param {Array<string>} [severities] Filter by severity levels (DEBUG, INFO, WARN, ERROR)
+         * @param {string} [search] Case-insensitive text search in the log body
+         * @param {AdminSearchPlatformLogsSourceEnum} [source] 
+         * @param {string} [boxId] Exact Box ID. Required when source is box.
+         * @param {string} [traceId] Exact OpenTelemetry trace ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminSearchPlatformLogs(from: Date, to: Date, page?: number, limit?: number, severities?: Array<string>, search?: string, source?: AdminSearchPlatformLogsSourceEnum, boxId?: string, traceId?: string, options?: RawAxiosRequestConfig): AxiosPromise<PaginatedLogs> {
+            return localVarFp.adminSearchPlatformLogs(from, to, page, limit, severities, search, source, boxId, traceId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Update runner scheduling status
          * @param {string} id 
          * @param {*} [options] Override http request option.
@@ -437,6 +735,16 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
  * AdminApi - object-oriented interface
  */
 export class AdminApi extends BaseAPI {
+    /**
+     * 
+     * @summary Check infrastructure log access
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminCheckInfrastructureLogsAccess(options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminCheckInfrastructureLogsAccess(options).then((request) => request(this.axios, this.basePath));
+    }
+
     /**
      * 
      * @summary Create runner
@@ -494,6 +802,41 @@ export class AdminApi extends BaseAPI {
 
     /**
      * 
+     * @summary Search infrastructure fallback logs
+     * @param {Date} from 
+     * @param {Date} to 
+     * @param {AdminSearchInfrastructureLogsSourceEnum} [source] 
+     * @param {string} [search] Case-sensitive literal phrase to find in a log message
+     * @param {number} [limit] 
+     * @param {string} [nextToken] Opaque CloudWatch pagination cursor
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminSearchInfrastructureLogs(from: Date, to: Date, source?: AdminSearchInfrastructureLogsSourceEnum, search?: string, limit?: number, nextToken?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminSearchInfrastructureLogs(from, to, source, search, limit, nextToken, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Search allowlisted platform OTLP logs
+     * @param {Date} from Start of time range (ISO 8601)
+     * @param {Date} to End of time range (ISO 8601)
+     * @param {number} [page] Page number (1-indexed)
+     * @param {number} [limit] Number of items per page
+     * @param {Array<string>} [severities] Filter by severity levels (DEBUG, INFO, WARN, ERROR)
+     * @param {string} [search] Case-insensitive text search in the log body
+     * @param {AdminSearchPlatformLogsSourceEnum} [source] 
+     * @param {string} [boxId] Exact Box ID. Required when source is box.
+     * @param {string} [traceId] Exact OpenTelemetry trace ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminSearchPlatformLogs(from: Date, to: Date, page?: number, limit?: number, severities?: Array<string>, search?: string, source?: AdminSearchPlatformLogsSourceEnum, boxId?: string, traceId?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminSearchPlatformLogs(from, to, page, limit, severities, search, source, boxId, traceId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Update runner scheduling status
      * @param {string} id 
      * @param {*} [options] Override http request option.
@@ -504,3 +847,17 @@ export class AdminApi extends BaseAPI {
     }
 }
 
+export const AdminSearchInfrastructureLogsSourceEnum = {
+    RUNNER: 'runner',
+    COLLECTOR: 'collector',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+export type AdminSearchInfrastructureLogsSourceEnum = typeof AdminSearchInfrastructureLogsSourceEnum[keyof typeof AdminSearchInfrastructureLogsSourceEnum];
+export const AdminSearchPlatformLogsSourceEnum = {
+    API: 'api',
+    WORKER: 'worker',
+    RUNNER: 'runner',
+    BOX: 'box',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+export type AdminSearchPlatformLogsSourceEnum = typeof AdminSearchPlatformLogsSourceEnum[keyof typeof AdminSearchPlatformLogsSourceEnum];

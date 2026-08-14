@@ -47,6 +47,8 @@ model_create_user.go
 model_create_volume.go
 model_health_controller_check_200_response.go
 model_health_controller_check_200_response_info_value.go
+model_infrastructure_logs.go
+model_infrastructure_logs_access_dto.go
 model_job.go
 model_job_status.go
 model_job_type.go

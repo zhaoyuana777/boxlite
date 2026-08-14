@@ -12,6 +12,7 @@ import {
   UsageApi as AnalyticsUsageApi,
 } from '@boxlite-ai/analytics-api-client'
 import {
+  AdminApi,
   ApiKeysApi,
   AuditApi,
   Configuration,
@@ -69,6 +70,7 @@ export class ApiClient {
   private config: Configuration
   private onUnauthorized?: () => Promise<void> | void
   private _boxApi: BoxApi
+  private _adminApi: AdminApi
   private _userApi: UsersApi
   private _apiKeyApi: ApiKeysApi
   private _organizationsApi: OrganizationsApi
@@ -127,6 +129,7 @@ export class ApiClient {
     )
 
     // Initialize APIs
+    this._adminApi = new AdminApi(this.config, undefined, axiosInstance)
     this._boxApi = new BoxApi(this.config, undefined, axiosInstance)
     this._userApi = new UsersApi(this.config, undefined, axiosInstance)
     this._apiKeyApi = new ApiKeysApi(this.config, undefined, axiosInstance)
@@ -205,6 +208,10 @@ export class ApiClient {
 
   public get boxApi() {
     return this._boxApi
+  }
+
+  public get adminApi() {
+    return this._adminApi
   }
 
   public get userApi() {

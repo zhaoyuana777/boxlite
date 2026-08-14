@@ -14,6 +14,11 @@ export enum InfrastructureLogSource {
   COLLECTOR = 'collector',
 }
 
+export class InfrastructureLogsAccessDto {
+  @ApiProperty()
+  canRead: boolean
+}
+
 export class InfrastructureLogsQueryDto {
   @ApiPropertyOptional({ enum: InfrastructureLogSource, default: InfrastructureLogSource.RUNNER })
   @IsOptional()
@@ -21,11 +26,11 @@ export class InfrastructureLogsQueryDto {
   source?: InfrastructureLogSource
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @IsDateString()
+  @IsDateString({ strict: true })
   from: string
 
   @ApiProperty({ type: String, format: 'date-time' })
-  @IsDateString()
+  @IsDateString({ strict: true })
   to: string
 
   @ApiPropertyOptional({ description: 'Case-sensitive literal phrase to find in a log message', maxLength: 256 })
@@ -34,7 +39,7 @@ export class InfrastructureLogsQueryDto {
   @MaxLength(256)
   search?: string
 
-  @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 50 })
+  @ApiPropertyOptional({ type: Number, minimum: 1, maximum: 100, default: 50 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

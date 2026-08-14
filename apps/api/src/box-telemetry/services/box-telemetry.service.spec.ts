@@ -45,10 +45,13 @@ describe('BoxTelemetryService log search', () => {
       '4bf92f3577b34da6a3ce929d0e0e4736',
     )
 
-    expect(query.mock.calls[0][0]).toContain('ServiceName = {serviceName:String}')
-    expect(query.mock.calls[0][0]).toContain('TraceId = {traceId:String}')
-    expect(query.mock.calls[0][1]).toEqual(
-      expect.objectContaining({ serviceName: 'boxlite-api', traceId: '4bf92f3577b34da6a3ce929d0e0e4736' }),
-    )
+    expect(query).toHaveBeenCalledTimes(2)
+    for (const [sql, params] of query.mock.calls) {
+      expect(sql).toContain('ServiceName = {serviceName:String}')
+      expect(sql).toContain('TraceId = {traceId:String}')
+      expect(params).toEqual(
+        expect.objectContaining({ serviceName: 'boxlite-api', traceId: '4bf92f3577b34da6a3ce929d0e0e4736' }),
+      )
+    }
   })
 })

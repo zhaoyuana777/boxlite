@@ -18,7 +18,7 @@ export function useBoxTraceSpans(
   const { selectedOrganization } = useSelectedOrganization()
 
   return useQuery<TraceSpan[]>({
-    queryKey: queryKeys.telemetry.traceSpans(boxId ?? '', traceId ?? ''),
+    queryKey: queryKeys.telemetry.traceSpans(selectedOrganization?.id ?? '', boxId ?? '', traceId ?? ''),
     queryFn: async () => {
       if (!selectedOrganization || !boxId || !traceId || !api.analyticsTelemetryApi) {
         throw new Error('Missing required parameters')

@@ -25,6 +25,8 @@ export * from './create-user';
 export * from './create-volume';
 export * from './health-controller-check200-response';
 export * from './health-controller-check200-response-info-value';
+export * from './infrastructure-logs';
+export * from './infrastructure-logs-access-dto';
 export * from './job';
 export * from './job-status';
 export * from './job-type';

@@ -119,6 +119,20 @@ describe('InfrastructureLogs', () => {
     expect(mocks.query.mock.lastCall?.[0]).toMatchObject({ source: 'collector', nextToken: undefined })
   })
 
+  it('does not append the same CloudWatch cursor twice', () => {
+    renderPage()
+
+    const nextButton = [...document.querySelectorAll('button')].find((button) => button.textContent?.includes('Next'))
+    expect(nextButton).toBeDefined()
+    act(() => {
+      nextButton?.click()
+      nextButton?.click()
+    })
+
+    expect(document.body.textContent).toContain('Page 2')
+    expect(document.body.textContent).not.toContain('Page 3')
+  })
+
   it('retries the current query from the error state', () => {
     mocks.result = { data: { items: [], nextToken: undefined }, isLoading: false, isError: true }
     renderPage()
@@ -152,5 +166,30 @@ describe('InfrastructureLogs', () => {
 
     expect(mocks.platformQuery.mock.lastCall?.[0]).toMatchObject({ source: 'api', page: 1, limit: 50 })
     expect(mocks.timeRangeProps.at(-1)).toMatchObject({ maxRangeMs: 72 * 60 * 60 * 1000 })
+  })
+
+  it('trims a valid trace id before validating and querying it', () => {
+    renderPage()
+
+    const platformTab = [...document.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes('Platform OTLP'),
+    )
+    act(() =>
+      platformTab?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: false })),
+    )
+
+    const traceId = document.querySelector<HTMLInputElement>('input[aria-label="Trace ID"]')
+    expect(traceId).not.toBeNull()
+    act(() => {
+      if (!traceId) return
+      const value = ' 4bf92f3577b34da6a3ce929d0e0e4736 '
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(traceId, value)
+      traceId.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    expect(mocks.platformQuery.mock.lastCall?.[0]).toMatchObject({
+      traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
+    })
+    expect(document.body.textContent).not.toContain('Trace ID must contain exactly')
   })
 })

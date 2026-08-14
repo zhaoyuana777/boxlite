@@ -79,7 +79,9 @@ function CloudWatchLogsPanel() {
     reset()
   }
   const nextPage = () => {
-    if (result.data?.nextToken) setCursors((items) => [...items, result.data?.nextToken])
+    if (result.data?.nextToken) {
+      setCursors((items) => (items.at(-1) === result.data?.nextToken ? items : [...items, result.data.nextToken]))
+    }
   }
 
   return (
@@ -136,7 +138,8 @@ function PlatformLogsPanel() {
   const [traceId, setTraceId] = useState('')
   const [severity, setSeverity] = useState('all')
   const [page, setPage] = useState(1)
-  const isTraceIdValid = traceId.length === 0 || /^[0-9a-fA-F]{32}$/.test(traceId)
+  const normalizedTraceId = traceId.trim()
+  const isTraceIdValid = normalizedTraceId.length === 0 || /^[0-9a-fA-F]{32}$/.test(normalizedTraceId)
   const enabled = (source !== 'box' || boxId.trim().length > 0) && isTraceIdValid
   const query = useMemo(
     () => ({
@@ -148,9 +151,9 @@ function PlatformLogsPanel() {
       limit: PAGE_SIZE,
       search: search || undefined,
       severities: severity === 'all' ? undefined : [severity],
-      traceId: isTraceIdValid ? traceId.trim() || undefined : undefined,
+      traceId: isTraceIdValid ? normalizedTraceId || undefined : undefined,
     }),
-    [source, boxId, from, to, page, search, severity, traceId, isTraceIdValid],
+    [source, boxId, from, to, page, search, severity, normalizedTraceId, isTraceIdValid],
   )
   const result = usePlatformLogs(query, enabled)
   const reset = useCallback(() => setPage(1), [])
@@ -231,7 +234,6 @@ function PlatformLogsPanel() {
             aria-label="Trace ID"
             placeholder="Exact Trace ID"
             value={traceId}
-            maxLength={32}
             onChange={(event) => {
               setTraceId(event.target.value)
               reset()

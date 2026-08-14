@@ -25,7 +25,7 @@ export function useBoxTraces(
   const { selectedOrganization } = useSelectedOrganization()
 
   return useQuery<PaginatedTraces>({
-    queryKey: queryKeys.telemetry.traces(boxId ?? '', params),
+    queryKey: queryKeys.telemetry.traces(selectedOrganization?.id ?? '', boxId ?? '', params),
     queryFn: async () => {
       if (!selectedOrganization || !boxId || !api.analyticsTelemetryApi) {
         throw new Error('Missing required parameters')

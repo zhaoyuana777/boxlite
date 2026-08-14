@@ -92,14 +92,22 @@ export function LogTable({
         <TableBody>
           {logs.map((log, index) => (
             <React.Fragment key={`${log.timestamp}-${index}`}>
-              <TableRow
-                className="cursor-pointer hover:bg-muted/50"
-                onClick={() => setExpandedRow(expandedRow === index ? null : index)}
-              >
+              <TableRow className="hover:bg-muted/50">
                 <TableCell>
-                  <ChevronDown
-                    className={cn('size-4 transition-transform duration-200', expandedRow === index && 'rotate-180')}
-                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label="Toggle log details"
+                    aria-expanded={expandedRow === index}
+                    onClick={() => setExpandedRow(expandedRow === index ? null : index)}
+                  >
+                    <ChevronDown
+                      className={cn(
+                        'size-4 transition-transform duration-200',
+                        expandedRow === index && 'rotate-180',
+                      )}
+                    />
+                  </Button>
                 </TableCell>
                 <TableCell className="font-mono text-xs">{formatTimestamp(log.timestamp)}</TableCell>
                 <TableCell>

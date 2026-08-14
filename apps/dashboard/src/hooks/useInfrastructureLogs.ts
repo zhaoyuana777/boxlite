@@ -4,7 +4,11 @@
  */
 
 import { useApi } from '@/hooks/useApi'
-import { LogEntry } from '@boxlite-ai/api-client'
+import {
+  AdminSearchInfrastructureLogsSourceEnum,
+  AdminSearchPlatformLogsSourceEnum,
+  LogEntry,
+} from '@boxlite-ai/api-client'
 import { useQuery } from '@tanstack/react-query'
 
 export type InfrastructureLogSource = 'runner' | 'collector'
@@ -48,9 +52,7 @@ export function useInfrastructureLogsAccess() {
   return useQuery({
     queryKey: ['infrastructure-logs', 'access'],
     queryFn: async () => {
-      const response = await api.axiosInstance.get<{ canRead: boolean }>('/admin/infrastructure-logs/access', {
-        timeout: 10_000,
-      })
+      const response = await api.adminApi.adminCheckInfrastructureLogsAccess({ timeout: 10_000 })
       return response.data
     },
     staleTime: 5 * 60_000,
@@ -63,14 +65,15 @@ export function useInfrastructureLogs(query: InfrastructureLogsQuery) {
   return useQuery({
     queryKey: ['infrastructure-logs', query],
     queryFn: async () => {
-      const response = await api.axiosInstance.get<InfrastructureLogsPage>('/admin/infrastructure-logs', {
-        params: {
-          ...query,
-          from: query.from.toISOString(),
-          to: query.to.toISOString(),
-        },
-        timeout: 10_000,
-      })
+      const response = await api.adminApi.adminSearchInfrastructureLogs(
+        query.from,
+        query.to,
+        query.source as AdminSearchInfrastructureLogsSourceEnum,
+        query.search,
+        query.limit,
+        query.nextToken,
+        { timeout: 10_000 },
+      )
       return response.data
     },
     staleTime: 10_000,
@@ -82,14 +85,18 @@ export function usePlatformLogs(query: PlatformLogsQuery, enabled = true) {
   return useQuery({
     queryKey: ['platform-logs', query],
     queryFn: async () => {
-      const response = await api.axiosInstance.get<PlatformLogsPage>('/admin/infrastructure-logs/platform', {
-        params: {
-          ...query,
-          from: query.from.toISOString(),
-          to: query.to.toISOString(),
-        },
-        timeout: 10_000,
-      })
+      const response = await api.adminApi.adminSearchPlatformLogs(
+        query.from,
+        query.to,
+        query.page,
+        query.limit,
+        query.severities,
+        query.search,
+        query.source as AdminSearchPlatformLogsSourceEnum,
+        query.boxId,
+        query.traceId,
+        { timeout: 10_000 },
+      )
       return response.data
     },
     enabled,

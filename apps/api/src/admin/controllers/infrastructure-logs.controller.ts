@@ -5,7 +5,7 @@
  */
 
 import { Controller, Get, Query, UseGuards } from '@nestjs/common'
-import { ApiBearerAuth, ApiExcludeController, ApiOAuth2, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger'
+import { ApiBearerAuth, ApiOAuth2, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger'
 import { Audit } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
@@ -16,14 +16,17 @@ import { RequiredApiRole } from '../../common/decorators/required-role.decorator
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
 import { AuthContext as IAuthContext } from '../../common/interfaces/auth-context.interface'
 import { SystemRole } from '../../user/enums/system-role.enum'
-import { InfrastructureLogsDto, InfrastructureLogsQueryDto } from '../dto/infrastructure-logs.dto'
+import {
+  InfrastructureLogsAccessDto,
+  InfrastructureLogsDto,
+  InfrastructureLogsQueryDto,
+} from '../dto/infrastructure-logs.dto'
 import { InfrastructureLogsService } from '../services/infrastructure-logs.service'
 import { PaginatedLogsDto } from '../../box-telemetry/dto/paginated-logs.dto'
 import { PlatformLogsQueryDto } from '../dto/platform-logs.dto'
 import { PlatformLogsService } from '../services/platform-logs.service'
 
 @ApiTags('admin')
-@ApiExcludeController()
 @Controller('admin/infrastructure-logs')
 @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, SystemActionGuard)
 @ApiOAuth2(['openid', 'profile', 'email'])
@@ -35,7 +38,9 @@ export class InfrastructureLogsController {
   ) {}
 
   @Get('access')
-  access(@AuthContext() authContext: IAuthContext): { canRead: boolean } {
+  @ApiOperation({ summary: 'Check infrastructure log access', operationId: 'adminCheckInfrastructureLogsAccess' })
+  @ApiResponse({ status: 200, type: InfrastructureLogsAccessDto })
+  access(@AuthContext() authContext: IAuthContext): InfrastructureLogsAccessDto {
     return { canRead: authContext.role === SystemRole.ADMIN }
   }
 

@@ -55,6 +55,8 @@ docs/CreateVolume.md
 docs/HealthApi.md
 docs/HealthControllerCheck200Response.md
 docs/HealthControllerCheck200ResponseInfoValue.md
+docs/InfrastructureLogs.md
+docs/InfrastructureLogsAccessDto.md
 docs/Job.md
 docs/JobStatus.md
 docs/JobType.md
@@ -151,6 +153,8 @@ models/create-volume.ts
 models/health-controller-check200-response-info-value.ts
 models/health-controller-check200-response.ts
 models/index.ts
+models/infrastructure-logs-access-dto.ts
+models/infrastructure-logs.ts
 models/job-status.ts
 models/job-type.ts
 models/job.ts

@@ -18,10 +18,24 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
+	"reflect"
 )
 
 
 type AdminAPI interface {
+
+	/*
+	AdminCheckInfrastructureLogsAccess Check infrastructure log access
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return AdminAPIAdminCheckInfrastructureLogsAccessRequest
+	*/
+	AdminCheckInfrastructureLogsAccess(ctx context.Context) AdminAPIAdminCheckInfrastructureLogsAccessRequest
+
+	// AdminCheckInfrastructureLogsAccessExecute executes the request
+	//  @return InfrastructureLogsAccessDto
+	AdminCheckInfrastructureLogsAccessExecute(r AdminAPIAdminCheckInfrastructureLogsAccessRequest) (*InfrastructureLogsAccessDto, *http.Response, error)
 
 	/*
 	AdminCreateRunner Create runner
@@ -86,6 +100,30 @@ type AdminAPI interface {
 	AdminRecoverBoxExecute(r AdminAPIAdminRecoverBoxRequest) (*Box, *http.Response, error)
 
 	/*
+	AdminSearchInfrastructureLogs Search infrastructure fallback logs
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return AdminAPIAdminSearchInfrastructureLogsRequest
+	*/
+	AdminSearchInfrastructureLogs(ctx context.Context) AdminAPIAdminSearchInfrastructureLogsRequest
+
+	// AdminSearchInfrastructureLogsExecute executes the request
+	//  @return InfrastructureLogs
+	AdminSearchInfrastructureLogsExecute(r AdminAPIAdminSearchInfrastructureLogsRequest) (*InfrastructureLogs, *http.Response, error)
+
+	/*
+	AdminSearchPlatformLogs Search allowlisted platform OTLP logs
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return AdminAPIAdminSearchPlatformLogsRequest
+	*/
+	AdminSearchPlatformLogs(ctx context.Context) AdminAPIAdminSearchPlatformLogsRequest
+
+	// AdminSearchPlatformLogsExecute executes the request
+	//  @return PaginatedLogs
+	AdminSearchPlatformLogsExecute(r AdminAPIAdminSearchPlatformLogsRequest) (*PaginatedLogs, *http.Response, error)
+
+	/*
 	AdminUpdateRunnerScheduling Update runner scheduling status
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -100,6 +138,103 @@ type AdminAPI interface {
 
 // AdminAPIService AdminAPI service
 type AdminAPIService service
+
+type AdminAPIAdminCheckInfrastructureLogsAccessRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+}
+
+func (r AdminAPIAdminCheckInfrastructureLogsAccessRequest) Execute() (*InfrastructureLogsAccessDto, *http.Response, error) {
+	return r.ApiService.AdminCheckInfrastructureLogsAccessExecute(r)
+}
+
+/*
+AdminCheckInfrastructureLogsAccess Check infrastructure log access
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @return AdminAPIAdminCheckInfrastructureLogsAccessRequest
+*/
+func (a *AdminAPIService) AdminCheckInfrastructureLogsAccess(ctx context.Context) AdminAPIAdminCheckInfrastructureLogsAccessRequest {
+	return AdminAPIAdminCheckInfrastructureLogsAccessRequest{
+		ApiService: a,
+		ctx: ctx,
+	}
+}
+
+// Execute executes the request
+//  @return InfrastructureLogsAccessDto
+func (a *AdminAPIService) AdminCheckInfrastructureLogsAccessExecute(r AdminAPIAdminCheckInfrastructureLogsAccessRequest) (*InfrastructureLogsAccessDto, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *InfrastructureLogsAccessDto
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminCheckInfrastructureLogsAccess")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/infrastructure-logs/access"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
 
 type AdminAPIAdminCreateRunnerRequest struct {
 	ctx context.Context
@@ -554,6 +689,377 @@ func (a *AdminAPIService) AdminRecoverBoxExecute(r AdminAPIAdminRecoverBoxReques
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
 
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
+type AdminAPIAdminSearchInfrastructureLogsRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	from *time.Time
+	to *time.Time
+	source *string
+	search *string
+	limit *float32
+	nextToken *string
+}
+
+func (r AdminAPIAdminSearchInfrastructureLogsRequest) From(from time.Time) AdminAPIAdminSearchInfrastructureLogsRequest {
+	r.from = &from
+	return r
+}
+
+func (r AdminAPIAdminSearchInfrastructureLogsRequest) To(to time.Time) AdminAPIAdminSearchInfrastructureLogsRequest {
+	r.to = &to
+	return r
+}
+
+func (r AdminAPIAdminSearchInfrastructureLogsRequest) Source(source string) AdminAPIAdminSearchInfrastructureLogsRequest {
+	r.source = &source
+	return r
+}
+
+// Case-sensitive literal phrase to find in a log message
+func (r AdminAPIAdminSearchInfrastructureLogsRequest) Search(search string) AdminAPIAdminSearchInfrastructureLogsRequest {
+	r.search = &search
+	return r
+}
+
+func (r AdminAPIAdminSearchInfrastructureLogsRequest) Limit(limit float32) AdminAPIAdminSearchInfrastructureLogsRequest {
+	r.limit = &limit
+	return r
+}
+
+// Opaque CloudWatch pagination cursor
+func (r AdminAPIAdminSearchInfrastructureLogsRequest) NextToken(nextToken string) AdminAPIAdminSearchInfrastructureLogsRequest {
+	r.nextToken = &nextToken
+	return r
+}
+
+func (r AdminAPIAdminSearchInfrastructureLogsRequest) Execute() (*InfrastructureLogs, *http.Response, error) {
+	return r.ApiService.AdminSearchInfrastructureLogsExecute(r)
+}
+
+/*
+AdminSearchInfrastructureLogs Search infrastructure fallback logs
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @return AdminAPIAdminSearchInfrastructureLogsRequest
+*/
+func (a *AdminAPIService) AdminSearchInfrastructureLogs(ctx context.Context) AdminAPIAdminSearchInfrastructureLogsRequest {
+	return AdminAPIAdminSearchInfrastructureLogsRequest{
+		ApiService: a,
+		ctx: ctx,
+	}
+}
+
+// Execute executes the request
+//  @return InfrastructureLogs
+func (a *AdminAPIService) AdminSearchInfrastructureLogsExecute(r AdminAPIAdminSearchInfrastructureLogsRequest) (*InfrastructureLogs, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *InfrastructureLogs
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminSearchInfrastructureLogs")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/infrastructure-logs"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.from == nil {
+		return localVarReturnValue, nil, reportError("from is required and must be specified")
+	}
+	if r.to == nil {
+		return localVarReturnValue, nil, reportError("to is required and must be specified")
+	}
+
+	if r.source != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "source", r.source, "form", "")
+	} else {
+		var defaultValue string = "runner"
+		parameterAddToHeaderOrQuery(localVarQueryParams, "source", defaultValue, "form", "")
+		r.source = &defaultValue
+	}
+	parameterAddToHeaderOrQuery(localVarQueryParams, "from", r.from, "form", "")
+	parameterAddToHeaderOrQuery(localVarQueryParams, "to", r.to, "form", "")
+	if r.search != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "search", r.search, "form", "")
+	}
+	if r.limit != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
+	} else {
+		var defaultValue float32 = 50
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", defaultValue, "form", "")
+		r.limit = &defaultValue
+	}
+	if r.nextToken != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "nextToken", r.nextToken, "form", "")
+	}
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
+type AdminAPIAdminSearchPlatformLogsRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	from *time.Time
+	to *time.Time
+	page *float32
+	limit *float32
+	severities *[]string
+	search *string
+	source *string
+	boxId *string
+	traceId *string
+}
+
+// Start of time range (ISO 8601)
+func (r AdminAPIAdminSearchPlatformLogsRequest) From(from time.Time) AdminAPIAdminSearchPlatformLogsRequest {
+	r.from = &from
+	return r
+}
+
+// End of time range (ISO 8601)
+func (r AdminAPIAdminSearchPlatformLogsRequest) To(to time.Time) AdminAPIAdminSearchPlatformLogsRequest {
+	r.to = &to
+	return r
+}
+
+// Page number (1-indexed)
+func (r AdminAPIAdminSearchPlatformLogsRequest) Page(page float32) AdminAPIAdminSearchPlatformLogsRequest {
+	r.page = &page
+	return r
+}
+
+// Number of items per page
+func (r AdminAPIAdminSearchPlatformLogsRequest) Limit(limit float32) AdminAPIAdminSearchPlatformLogsRequest {
+	r.limit = &limit
+	return r
+}
+
+// Filter by severity levels (DEBUG, INFO, WARN, ERROR)
+func (r AdminAPIAdminSearchPlatformLogsRequest) Severities(severities []string) AdminAPIAdminSearchPlatformLogsRequest {
+	r.severities = &severities
+	return r
+}
+
+// Case-insensitive text search in the log body
+func (r AdminAPIAdminSearchPlatformLogsRequest) Search(search string) AdminAPIAdminSearchPlatformLogsRequest {
+	r.search = &search
+	return r
+}
+
+func (r AdminAPIAdminSearchPlatformLogsRequest) Source(source string) AdminAPIAdminSearchPlatformLogsRequest {
+	r.source = &source
+	return r
+}
+
+// Exact Box ID. Required when source is box.
+func (r AdminAPIAdminSearchPlatformLogsRequest) BoxId(boxId string) AdminAPIAdminSearchPlatformLogsRequest {
+	r.boxId = &boxId
+	return r
+}
+
+// Exact OpenTelemetry trace ID
+func (r AdminAPIAdminSearchPlatformLogsRequest) TraceId(traceId string) AdminAPIAdminSearchPlatformLogsRequest {
+	r.traceId = &traceId
+	return r
+}
+
+func (r AdminAPIAdminSearchPlatformLogsRequest) Execute() (*PaginatedLogs, *http.Response, error) {
+	return r.ApiService.AdminSearchPlatformLogsExecute(r)
+}
+
+/*
+AdminSearchPlatformLogs Search allowlisted platform OTLP logs
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @return AdminAPIAdminSearchPlatformLogsRequest
+*/
+func (a *AdminAPIService) AdminSearchPlatformLogs(ctx context.Context) AdminAPIAdminSearchPlatformLogsRequest {
+	return AdminAPIAdminSearchPlatformLogsRequest{
+		ApiService: a,
+		ctx: ctx,
+	}
+}
+
+// Execute executes the request
+//  @return PaginatedLogs
+func (a *AdminAPIService) AdminSearchPlatformLogsExecute(r AdminAPIAdminSearchPlatformLogsRequest) (*PaginatedLogs, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *PaginatedLogs
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminSearchPlatformLogs")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/infrastructure-logs/platform"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.from == nil {
+		return localVarReturnValue, nil, reportError("from is required and must be specified")
+	}
+	if r.to == nil {
+		return localVarReturnValue, nil, reportError("to is required and must be specified")
+	}
+
+	parameterAddToHeaderOrQuery(localVarQueryParams, "from", r.from, "form", "")
+	parameterAddToHeaderOrQuery(localVarQueryParams, "to", r.to, "form", "")
+	if r.page != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "page", r.page, "form", "")
+	} else {
+		var defaultValue float32 = 1
+		parameterAddToHeaderOrQuery(localVarQueryParams, "page", defaultValue, "form", "")
+		r.page = &defaultValue
+	}
+	if r.limit != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
+	} else {
+		var defaultValue float32 = 50
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", defaultValue, "form", "")
+		r.limit = &defaultValue
+	}
+	if r.severities != nil {
+		t := *r.severities
+		if reflect.TypeOf(t).Kind() == reflect.Slice {
+			s := reflect.ValueOf(t)
+			for i := 0; i < s.Len(); i++ {
+				parameterAddToHeaderOrQuery(localVarQueryParams, "severities", s.Index(i).Interface(), "form", "multi")
+			}
+		} else {
+			parameterAddToHeaderOrQuery(localVarQueryParams, "severities", t, "form", "multi")
+		}
+	}
+	if r.search != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "search", r.search, "form", "")
+	}
+	if r.source != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "source", r.source, "form", "")
+	} else {
+		var defaultValue string = "api"
+		parameterAddToHeaderOrQuery(localVarQueryParams, "source", defaultValue, "form", "")
+		r.source = &defaultValue
+	}
+	if r.boxId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "boxId", r.boxId, "form", "")
+	}
+	if r.traceId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "traceId", r.traceId, "form", "")
+	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
 

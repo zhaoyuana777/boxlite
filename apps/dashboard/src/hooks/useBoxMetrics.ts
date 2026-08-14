@@ -24,7 +24,7 @@ export function useBoxMetrics(
   const { selectedOrganization } = useSelectedOrganization()
 
   return useQuery<MetricsResponse>({
-    queryKey: queryKeys.telemetry.metrics(boxId ?? '', params),
+    queryKey: queryKeys.telemetry.metrics(selectedOrganization?.id ?? '', boxId ?? '', params),
     queryFn: async () => {
       if (!selectedOrganization || !boxId || !api.analyticsTelemetryApi) {
         throw new Error('Missing required parameters')
