@@ -230,6 +230,7 @@ export async function deployStack() {
       resources: clickHouseResources,
       otelCollector,
       otelCollectorOtlpHttpUrl,
+      verificationTrigger: `clickstack-gateway:${clickStackGatewayFlag}:v1`,
     })
 
     // ─── 5b. OUTBOUND MAIL ───────────────────────────────────────────────────
@@ -313,6 +314,7 @@ export async function deployStack() {
         clickStackOidcConfig && clickStackOidcSecrets && clickHouseResources.mode === 'self-hosted'
           ? {
               clickHouse: clickHouseResources,
+              writerReady: clickHouseWriterReadyDependency,
               domain: serviceDomain('clickstack'),
               oidcIssuer: clickStackOidcConfig.issuer,
               oidcAudience: clickStackOidcConfig.audience,
