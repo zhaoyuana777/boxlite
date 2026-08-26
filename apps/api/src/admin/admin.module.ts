@@ -7,12 +7,15 @@
 import { Module } from '@nestjs/common'
 import { AdminRunnerController } from './controllers/runner.controller'
 import { AdminBoxController } from './controllers/box.controller'
+import { AdminBoxesController } from './controllers/boxes.controller'
+import { AdminBoxReadService } from './services/admin-box-read.service'
 import { BoxModule } from '../box/box.module'
 import { RegionModule } from '../region/region.module'
 import { OrganizationModule } from '../organization/organization.module'
 
 @Module({
   imports: [BoxModule, RegionModule, OrganizationModule],
-  controllers: [AdminRunnerController, AdminBoxController],
+  controllers: [AdminRunnerController, AdminBoxController, AdminBoxesController],
+  providers: [AdminBoxReadService],
 })
 export class AdminModule {}

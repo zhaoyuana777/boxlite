@@ -102,3 +102,35 @@ describe('BoxRepository.conditionalStartForProxy', () => {
     await expect(repo.conditionalStartForProxy('box-1', 'org-1')).resolves.toBeNull()
   })
 })
+
+describe('BoxRepository admin reads', () => {
+  it('BoxLite admin read uses a deterministic updatedAt/id keyset boundary', async () => {
+    const qb: any = {}
+    for (const method of ['select', 'addSelect', 'where', 'andWhere', 'orderBy', 'addOrderBy', 'take']) {
+      qb[method] = jest.fn(() => qb)
+    }
+    qb.getRawAndEntities = jest.fn().mockResolvedValue({ entities: [], raw: [] })
+    const dataSource = {
+      getRepository: () => ({
+        manager: {},
+        createQueryBuilder: jest.fn(() => qb),
+      }),
+    } as any
+    const repository = new BoxRepository(dataSource, {} as any, {} as any) as any
+    const updatedAt = '2026-08-26T00:00:00.123800Z'
+
+    await repository.findAdminPage({
+      limit: 50,
+      filters: { state: BoxState.STARTED },
+      after: { updatedAt, id: 'Ab3xYz09LmN2' },
+    })
+
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      '(box."updatedAt" < :updatedAt OR (box."updatedAt" = :updatedAt AND box.id < :id))',
+      { updatedAt, id: 'Ab3xYz09LmN2' },
+    )
+    expect(qb.orderBy).toHaveBeenCalledWith('box.updatedAt', 'DESC')
+    expect(qb.addOrderBy).toHaveBeenCalledWith('box.id', 'DESC')
+    expect(qb.take).toHaveBeenCalledWith(51)
+  })
+})

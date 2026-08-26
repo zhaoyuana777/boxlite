@@ -40,6 +40,50 @@ const PG_LOCK_TIMEOUT_CODE = '55P03'
 // A box the migration marker may claim, with the stamp its claim copies.
 type ParkedBox = { id: string; updatedAt: Date }
 
+export type AdminBoxRecord = Pick<
+  Box,
+  | 'id'
+  | 'name'
+  | 'organizationId'
+  | 'runnerId'
+  | 'region'
+  | 'state'
+  | 'desiredState'
+  | 'cpu'
+  | 'mem'
+  | 'disk'
+  | 'recoverable'
+  | 'createdAt'
+  | 'updatedAt'
+>
+
+export type AdminBoxPageRecord = AdminBoxRecord & {
+  cursorUpdatedAt: string
+}
+
+export type AdminBoxFilters = {
+  state?: BoxState
+  organizationId?: string
+  runnerId?: string
+  regionId?: string
+}
+
+const ADMIN_BOX_SELECT = [
+  'box.id',
+  'box.name',
+  'box.organizationId',
+  'box.runnerId',
+  'box.region',
+  'box.state',
+  'box.desiredState',
+  'box.cpu',
+  'box.mem',
+  'box.disk',
+  'box.recoverable',
+  'box.createdAt',
+  'box.updatedAt',
+]
+
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
   private readonly logger = new Logger(BoxRepository.name)
@@ -50,6 +94,50 @@ export class BoxRepository extends BaseRepository<Box> {
     private readonly boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
   ) {
     super(dataSource, eventEmitter, Box)
+  }
+
+  async findAdminPage(params: {
+    limit: number
+    filters: AdminBoxFilters
+    after?: { updatedAt: string; id: string }
+  }): Promise<{ items: AdminBoxPageRecord[]; hasMore: boolean }> {
+    const query = this.createQueryBuilder('box')
+      .select(ADMIN_BOX_SELECT)
+      .addSelect(`to_char(box."updatedAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`, 'cursorUpdatedAt')
+      .where('1 = 1')
+    const { filters, after } = params
+
+    if (filters.state) query.andWhere('box.state = :state', { state: filters.state })
+    if (filters.organizationId) {
+      query.andWhere('box.organizationId = :organizationId', { organizationId: filters.organizationId })
+    }
+    if (filters.runnerId) query.andWhere('box.runnerId = :runnerId', { runnerId: filters.runnerId })
+    if (filters.regionId) query.andWhere('box.region = :regionId', { regionId: filters.regionId })
+    if (after) {
+      query.andWhere('(box."updatedAt" < :updatedAt OR (box."updatedAt" = :updatedAt AND box.id < :id))', after)
+    }
+
+    const { entities, raw } = await query
+      .orderBy('box.updatedAt', 'DESC')
+      .addOrderBy('box.id', 'DESC')
+      .take(params.limit + 1)
+      .getRawAndEntities<{ cursorUpdatedAt: string }>()
+    const rows = entities.map((box, index) => ({
+      ...(box as AdminBoxRecord),
+      cursorUpdatedAt: raw[index].cursorUpdatedAt,
+    }))
+
+    return {
+      items: rows.slice(0, params.limit),
+      hasMore: rows.length > params.limit,
+    }
+  }
+
+  async findAdminOne(boxId: string): Promise<AdminBoxRecord | null> {
+    return (await this.createQueryBuilder('box')
+      .select(ADMIN_BOX_SELECT)
+      .where('box.id = :boxId', { boxId })
+      .getOne()) as AdminBoxRecord | null
   }
 
   async insert(box: Box): Promise<Box> {
