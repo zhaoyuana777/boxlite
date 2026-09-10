@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -62,7 +63,11 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 
 	runnerConn, err := dialRunnerTunnel(request.Context(), runnerInfo, boxID, port)
 	if err != nil {
-		http.Error(writer, "runner tunnel unavailable", http.StatusBadGateway)
+		status := http.StatusBadGateway
+		if errors.Is(err, common_proxy.ErrTunnelCapacity) {
+			status = http.StatusServiceUnavailable
+		}
+		http.Error(writer, "runner tunnel unavailable", status)
 		return
 	}
 	defer runnerConn.Close()
@@ -170,6 +175,9 @@ func dialRunnerTunnel(ctx context.Context, runnerInfo *RunnerInfo, boxID string,
 	if response.StatusCode != http.StatusOK {
 		response.Body.Close()
 		conn.Close()
+		if response.StatusCode == http.StatusServiceUnavailable {
+			return nil, common_proxy.ErrTunnelCapacity
+		}
 		return nil, fmt.Errorf("runner CONNECT returned %s", response.Status)
 	}
 	if err := conn.SetDeadline(time.Time{}); err != nil {

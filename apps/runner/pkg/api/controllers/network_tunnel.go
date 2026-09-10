@@ -1,8 +1,10 @@
 package controllers
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 
@@ -11,8 +13,30 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+type guestTunnelTarget struct {
+	boxID string
+	dial  func() (net.Conn, error)
+}
+
 // BoxliteNetworkTunnel upgrades an authenticated CONNECT request to a raw guest stream.
-func BoxliteNetworkTunnel(logger *slog.Logger) gin.HandlerFunc {
+func BoxliteNetworkTunnel(logger *slog.Logger, maxTunnels, maxPerBox int) gin.HandlerFunc {
+	return networkTunnelHandler(logger, newTunnelLimits(maxTunnels, maxPerBox), func(ctx context.Context, boxID string, port uint16) (guestTunnelTarget, error) {
+		r, err := runner.GetInstance(nil)
+		if err != nil {
+			return guestTunnelTarget{}, err
+		}
+		box, err := r.Boxlite.GetBox(ctx, boxID)
+		if err != nil {
+			return guestTunnelTarget{}, err
+		}
+		return guestTunnelTarget{
+			boxID: box.ID(), // Names and IDs must spend the same Box's capacity.
+			dial:  func() (net.Conn, error) { return r.Boxlite.DialGuestPort(ctx, box.ID(), port) },
+		}, nil
+	})
+}
+
+func networkTunnelHandler(logger *slog.Logger, limits *tunnelLimits, resolve func(context.Context, string, uint16) (guestTunnelTarget, error)) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		if ctx.Request.Method != http.MethodConnect {
 			ctx.JSON(http.StatusMethodNotAllowed, gin.H{"error": "CONNECT required"})
@@ -25,13 +49,26 @@ func BoxliteNetworkTunnel(logger *slog.Logger) gin.HandlerFunc {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid target port %q", rawPort)})
 			return
 		}
-		r, err := runner.GetInstance(nil)
-		if err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		select {
+		case limits.slots <- struct{}{}:
+			defer func() { <-limits.slots }()
+		default:
+			ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": common_proxy.ErrTunnelCapacity.Error()})
 			return
 		}
+		target, err := resolve(ctx.Request.Context(), boxID, uint16(port))
+		if err != nil {
+			logger.WarnContext(ctx.Request.Context(), "guest tunnel lookup failed", "box", boxID, "error", err)
+			ctx.JSON(http.StatusBadGateway, gin.H{"error": "guest tunnel unavailable"})
+			return
+		}
+		if !limits.acquireBox(target.boxID) {
+			ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": common_proxy.ErrTunnelCapacity.Error()})
+			return
+		}
+		defer limits.releaseBox(target.boxID)
 
-		guestConn, err := r.Boxlite.DialGuestPort(ctx.Request.Context(), boxID, uint16(port))
+		guestConn, err := target.dial()
 		if err != nil {
 			logger.WarnContext(ctx.Request.Context(), "guest tunnel dial failed", "box", boxID, "port", port, "error", err)
 			ctx.JSON(http.StatusBadGateway, gin.H{"error": "guest tunnel unavailable"})

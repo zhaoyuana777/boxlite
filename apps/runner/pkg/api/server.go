@@ -44,6 +44,9 @@ import (
 )
 
 type ApiServerConfig struct {
+	MaxTunnels       int
+	MaxTunnelsPerBox int
+
 	Logger      *slog.Logger
 	ApiPort     int
 	ApiToken    string
@@ -55,6 +58,9 @@ type ApiServerConfig struct {
 
 func NewApiServer(config ApiServerConfig) *ApiServer {
 	return &ApiServer{
+		maxTunnels:       config.MaxTunnels,
+		maxTunnelsPerBox: config.MaxTunnelsPerBox,
+
 		logger:      config.Logger.With(slog.String("component", "server")),
 		apiPort:     config.ApiPort,
 		apiToken:    config.ApiToken,
@@ -66,6 +72,9 @@ func NewApiServer(config ApiServerConfig) *ApiServer {
 }
 
 type ApiServer struct {
+	maxTunnels       int
+	maxTunnelsPerBox int
+
 	logger      *slog.Logger
 	apiPort     int
 	apiToken    string
@@ -157,7 +166,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxliteApi.PUT("/:boxId/files", controllers.BoxliteFileUpload)
 		boxliteApi.GET("/:boxId/files", controllers.BoxliteFileDownload)
 		boxliteApi.GET("/:boxId/metrics", controllers.BoxliteMetrics)
-		boxliteApi.Handle(http.MethodConnect, "/:boxId/network/tunnel", controllers.BoxliteNetworkTunnel(boxControllerLogger))
+		boxliteApi.Handle(http.MethodConnect, "/:boxId/network/tunnel", controllers.BoxliteNetworkTunnel(boxControllerLogger, a.maxTunnels, a.maxTunnelsPerBox))
 	}
 
 	a.httpServer = &http.Server{

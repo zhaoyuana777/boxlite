@@ -6,22 +6,126 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
+	"github.com/gin-gonic/gin"
 )
 
 type closeWriteConn struct {
 	net.Conn
 	called bool
+}
+
+func TestConnectCapacityRejectsBeforeDispatchAndReleases(t *testing.T) {
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	defer close(release)
+	var calls atomic.Int32
+	var wg sync.WaitGroup
+	handler := connectAwareHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) <= 2 {
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}), http.NotFoundHandler(), &wg, 2)
+	done := make(chan struct{}, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for range 2 {
+		go func() {
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil).WithContext(ctx))
+			done <- struct{}{}
+		}()
+	}
+	for range 2 {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("initial CONNECT was not dispatched")
+		}
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil))
+	if response.Code != http.StatusServiceUnavailable || calls.Load() != 2 {
+		t.Fatalf("over capacity: status=%d dispatches=%d; want 503 and 2", response.Code, calls.Load())
+	}
+	cancel()
+	for range 2 {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("cancelled CONNECT did not return")
+		}
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil))
+	if response.Code != http.StatusOK || calls.Load() != 3 {
+		t.Fatalf("capacity was not released: status=%d dispatches=%d", response.Code, calls.Load())
+	}
+}
+
+func TestTunnelCapacityResponseReachesConnectAndPreview(t *testing.T) {
+	for _, runnerStatus := range []int{http.StatusServiceUnavailable, http.StatusBadGateway} {
+		runner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodConnect {
+				t.Errorf("runner received %s, want CONNECT", r.Method)
+			}
+			http.Error(w, "runner failure", runnerStatus)
+		}))
+		defer runner.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		public := common_cache.NewMapCache[bool](ctx)
+		runners := common_cache.NewMapCache[RunnerInfo](ctx)
+		activity := common_cache.NewMapCache[bool](ctx)
+		if err := public.Set(ctx, "AbCdEf123456", true, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if err := runners.Set(ctx, "AbCdEf123456", RunnerInfo{ApiUrl: runner.URL}, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if err := activity.Set(ctx, "AbCdEf123456", true, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		p := &Proxy{boxPublicCache: public, boxRunnerCache: runners, boxLastActivityUpdateCache: activity}
+		request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
+		request.Host = "3000-d-416243644566313233343536.proxy.test"
+		response := httptest.NewRecorder()
+		p.handleTunnelConnect(response, request)
+		if response.Code != runnerStatus {
+			t.Errorf("CONNECT: runner status %d became %d", runnerStatus, response.Code)
+		}
+
+		transport := p.newGuestPortTransport()
+		defer transport.CloseIdleConnections()
+		target, _ := url.Parse("http://AbCdEf123456:3000/")
+		router := gin.New()
+		router.GET("/", common_proxy.NewProxyRequestHandler(func(*gin.Context) (*common_proxy.RequestTarget, error) {
+			return &common_proxy.RequestTarget{URL: target, Transport: transport}, nil
+		}, nil))
+		response = httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://preview.test/", nil).WithContext(ctx))
+		if response.Code != runnerStatus {
+			body, _ := io.ReadAll(response.Result().Body)
+			t.Errorf("preview: runner status %d became %d (%s)", runnerStatus, response.Code, body)
+		}
+	}
 }
 
 func (c *closeWriteConn) CloseWrite() error {
@@ -35,7 +139,7 @@ func TestConnectAuthorityBypassesHTTPRouter(t *testing.T) {
 	handler := connectAwareHandler(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		matched = true
 		writer.WriteHeader(http.StatusProxyAuthRequired)
-	}), http.NotFoundHandler(), shutdownWg)
+	}), http.NotFoundHandler(), shutdownWg, 2)
 
 	request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
 	request.RequestURI = "proxy.test:443"
@@ -54,7 +158,7 @@ func TestConnectHandlerTracksTunnelForShutdown(t *testing.T) {
 	handler := connectAwareHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		close(started)
 		<-release
-	}), http.NotFoundHandler(), shutdownWg)
+	}), http.NotFoundHandler(), shutdownWg, 2)
 
 	request := httptest.NewRequest(http.MethodConnect, "http://proxy.test", nil)
 	done := make(chan struct{})
