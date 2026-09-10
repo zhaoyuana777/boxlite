@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -17,6 +18,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// ErrTunnelCapacity identifies a refused tunnel, including through HTTP transport wrappers.
+var ErrTunnelCapacity = errors.New("tunnel capacity exhausted")
 
 type bufferedConn struct {
 	net.Conn
@@ -29,7 +33,12 @@ func NewBufferedConn(conn net.Conn, reader *bufio.Reader) net.Conn {
 }
 
 func (c *bufferedConn) Read(payload []byte) (int, error) {
-	return c.reader.Read(payload)
+	if buffered := c.reader.Buffered(); buffered > 0 {
+		return c.reader.Read(payload[:min(len(payload), buffered)])
+	}
+	// After draining prefetched bytes, bypass net/http's reader: it cancels
+	// the request on TCP EOF, which would truncate the other half of a tunnel.
+	return c.Conn.Read(payload)
 }
 
 func (c *bufferedConn) CloseWrite() error {
@@ -123,6 +132,14 @@ func NewProxyRequestHandler(getProxyTarget func(*gin.Context) (*RequestTarget, e
 		}
 
 		reverseProxy := &httputil.ReverseProxy{
+			ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+				if errors.Is(err, ErrTunnelCapacity) {
+					http.Error(w, ErrTunnelCapacity.Error(), http.StatusServiceUnavailable)
+					return
+				}
+				log.Printf("http: proxy error: %v", err)
+				w.WriteHeader(http.StatusBadGateway)
+			},
 			Rewrite: func(req *httputil.ProxyRequest) {
 				req.Out.Host = target.Host
 				req.Out.URL.Scheme = target.URL.Scheme

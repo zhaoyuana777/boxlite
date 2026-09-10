@@ -210,7 +210,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", config.ProxyPort),
-		Handler:           connectAwareHandler(http.HandlerFunc(proxy.handleTunnelConnect), router, shutdownWg),
+		Handler:           connectAwareHandler(http.HandlerFunc(proxy.handleTunnelConnect), router, shutdownWg, config.MaxTunnels),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -279,9 +279,18 @@ func (p *Proxy) newGuestPortTransport() *http.Transport {
 	}
 }
 
-func connectAwareHandler(connectHandler, next http.Handler, shutdownWg *sync.WaitGroup) http.Handler {
+func connectAwareHandler(connectHandler, next http.Handler, shutdownWg *sync.WaitGroup, maxTunnels int) http.Handler {
+	slots := make(chan struct{}, maxTunnels)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodConnect {
+			// Hold capacity through lookup, dial and the entire hijacked stream.
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			default:
+				http.Error(writer, "tunnel capacity exhausted", http.StatusServiceUnavailable)
+				return
+			}
 			shutdownWg.Add(1)
 			defer shutdownWg.Done()
 			connectHandler.ServeHTTP(writer, request)

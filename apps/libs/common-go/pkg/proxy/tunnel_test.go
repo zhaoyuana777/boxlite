@@ -6,11 +6,56 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
 
 var errInjectedRead = errors.New("injected read failure")
+
+func TestAcceptConnectHalfCloseDoesNotCancelRequest(t *testing.T) {
+	done := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := AcceptConnect(w)
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+		payload, err := io.ReadAll(conn)
+		if err != nil {
+			done <- err
+			return
+		}
+		done <- r.Context().Err()
+		_, _ = conn.Write(payload)
+	}))
+	defer server.Close()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	_, _ = io.WriteString(conn, "CONNECT guest:3000 HTTP/1.1\r\nHost: guest:3000\r\n\r\nrequest")
+	reader := bufio.NewReader(conn)
+	response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT failed: response=%v error=%v", response, err)
+	}
+	if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	if payload, err := io.ReadAll(reader); err != nil || string(payload) != "request" {
+		t.Fatalf("response=%q error=%v", payload, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("half-close canceled hijacked request: %v", err)
+	}
+}
 
 type readErrorConn struct{ net.Conn }
 

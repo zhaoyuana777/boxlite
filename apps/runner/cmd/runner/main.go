@@ -214,6 +214,9 @@ func run() int {
 	}
 
 	apiServer := api.NewApiServer(api.ApiServerConfig{
+		MaxTunnels:       cfg.MaxTunnels,
+		MaxTunnelsPerBox: cfg.MaxTunnelsPerBox,
+
 		Logger:      logger,
 		ApiPort:     cfg.ApiPort,
 		ApiToken:    cfg.ApiToken,
