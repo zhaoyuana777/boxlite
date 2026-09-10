@@ -7,7 +7,19 @@ package config
 import (
 	"maps"
 	"testing"
+
+	"github.com/go-playground/validator/v10"
 )
+
+func TestTunnelCapacityValidation(t *testing.T) {
+	validate := validator.New()
+	for _, limit := range []int{-1, 0, 1, 256} {
+		err := validate.StructPartial(&Config{MaxTunnels: limit}, "MaxTunnels")
+		if (err == nil) != (limit > 0) {
+			t.Errorf("limit=%d: valid=%v", limit, err == nil)
+		}
+	}
+}
 
 func TestGetOtelHeaders(t *testing.T) {
 	cases := []struct {

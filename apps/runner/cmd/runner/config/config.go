@@ -15,6 +15,8 @@ import (
 )
 
 type Config struct {
+	MaxTunnels                         int           `envconfig:"RUNNER_MAX_TUNNELS" default:"256" validate:"gt=0"`
+	MaxTunnelsPerBox                   int           `envconfig:"RUNNER_MAX_TUNNELS_PER_BOX" default:"32" validate:"gt=0,ltefield=MaxTunnels"`
 	BoxliteApiUrl                      string        `envconfig:"BOXLITE_API_URL"`
 	ApiToken                           string        `envconfig:"BOXLITE_RUNNER_TOKEN"`
 	ApiPort                            int           `envconfig:"API_PORT"`

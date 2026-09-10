@@ -21,6 +21,7 @@ import (
 )
 
 type Config struct {
+	MaxTunnels            int                `envconfig:"PROXY_MAX_TUNNELS" default:"256" validate:"gt=0"`
 	ProxyPort             int                `envconfig:"PROXY_PORT" validate:"required"`
 	ProxyProtocol         string             `envconfig:"PROXY_PROTOCOL" validate:"required"`
 	ProxyApiKey           string             `envconfig:"PROXY_API_KEY" validate:"required"`
