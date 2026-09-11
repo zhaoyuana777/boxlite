@@ -49,9 +49,6 @@ describe('Box recovery', () => {
     await action.run(box, lock)
     expect(adapter.recoverBox).toHaveBeenCalledWith(box)
     expect(adapter.startBox).not.toHaveBeenCalled()
-    expect(box.state).toBe(BoxState.STARTING)
-    expect(box.errorReason).toBe('previous failure')
-    await action.run(box, lock)
     expect(box.state).toBe(BoxState.STARTED)
     expect(box.recoveryStartedAt).toBeNull()
     expect(box.errorReason).toBeNull()
@@ -59,10 +56,9 @@ describe('Box recovery', () => {
   })
 
   it.each([BoxState.UNKNOWN, BoxState.DESTROYED, BoxState.ERROR, BoxState.STOPPED])(
-    'fails safely when the original VM reports %s after a process restart',
+    'fails safely when the original VM reports %s after acknowledging recovery',
     async (runtimeState) => {
-      const { box, adapter, action, lock } = fixture(BoxState.STARTING)
-      // The only recovery context is the persisted entity, not a request-local flag.
+      const { box, adapter, action, lock } = fixture()
       adapter.boxInfo.mockResolvedValue({ state: runtimeState })
       await action.run(box, lock)
       expect(box.state).toBe(BoxState.ERROR)
@@ -78,7 +74,8 @@ describe('Box recovery', () => {
     adapter.boxInfo.mockResolvedValue({ state: BoxState.UNKNOWN })
     await action.run(box, lock)
     expect(adapter.createBox).not.toHaveBeenCalled()
-    expect(box.state).toBe(BoxState.ERROR)
+    expect(box.pending).toBe(true)
+    expect(box.recoveryStartedAt).not.toBeNull()
   })
 
   it('does not dispatch recovery after losing the lifecycle lock', async () => {
@@ -127,5 +124,63 @@ describe('Box recovery', () => {
     expect(box.errorReason).not.toContain('PRIVATE_TEST_VALUE')
     expect(box.recoverable).toBe(true)
     expect(box.pending).toBe(false)
+  })
+})
+
+describe('Recovery acknowledgement', () => {
+  it.each(['ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'ERR_CANCELED'])(
+    'keeps %s unresolved until the deadline, without replaying recovery',
+    async (code) => {
+      const { box, adapter, action, lock } = fixture()
+      adapter.recoverBox.mockRejectedValue(Object.assign(new Error('lost response'), { code }))
+      await action.run(box, lock)
+      expect(box.state).toBe(BoxState.STARTING)
+      expect(box.pending).toBe(true)
+      expect(box.errorReason).toBe('previous failure')
+      box.recoveryStartedAt = new Date(Date.now() - 6 * 60_000)
+      await action.run(box, lock)
+      expect(box.state).toBe(BoxState.ERROR)
+      expect(box.errorReason).toMatch(/unconfirmed/)
+      expect(adapter.recoverBox).toHaveBeenCalledTimes(1)
+      expect(adapter.createBox).not.toHaveBeenCalled()
+    },
+  )
+  it('does not confirm an old running VM after API crashed before dispatch', async () => {
+    const { box, adapter, action, lock } = fixture(BoxState.STARTING)
+    // DB survived the crash after STARTING was written; RPC was never sent.
+    adapter.boxInfo.mockResolvedValue({ state: BoxState.STARTED })
+    await action.run(box, lock)
+    expect(adapter.recoverBox).not.toHaveBeenCalled()
+    expect(box.state).not.toBe(BoxState.STARTED)
+  })
+
+  it('does not fail recovery when another worker observes stop/remount in flight', async () => {
+    const { box, adapter, action, lock, getCode } = fixture()
+    let finish!: () => void
+    let entered!: () => void
+    const inFlight = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    adapter.recoverBox.mockImplementation(() => {
+      entered()
+      return new Promise<void>((resolve) => {
+        finish = resolve
+      })
+    })
+    const first = action.run(box, lock)
+    await inFlight
+    expect(box.errorReason).toBe('previous failure')
+    // syncInstanceState's 30-second lease expires; next worker owns the key.
+    const successor = new LockCode('successor')
+    getCode.mockResolvedValue(successor)
+    adapter.boxInfo.mockResolvedValue({ state: BoxState.STOPPED })
+    try {
+      await action.run(box, successor)
+      expect(box.state).toBe(BoxState.STARTING)
+      expect(box.recoveryStartedAt).not.toBeNull()
+    } finally {
+      finish()
+      await first
+    }
   })
 })

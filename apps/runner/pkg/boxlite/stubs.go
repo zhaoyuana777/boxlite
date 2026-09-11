@@ -15,7 +15,8 @@ import (
 )
 
 // RecoverBox restarts the original VM using its persisted configuration and disks.
-// The legacy DTO is retained for wire compatibility, not used to rebuild the box.
+// Legacy VM settings are ignored; the saved control-plane volume list only
+// validates the local mount record and never changes the VM's configuration.
 func (c *Client) RecoverBox(ctx context.Context, boxId string, legacy dto.RecoverBoxDTO) error {
 	release, err := c.operations.acquire(ctx, boxId)
 	if err != nil {
@@ -53,7 +54,7 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, legacy dto.Recove
 	c.mu.Lock()
 	c.boxes[boxId] = bx
 	c.mu.Unlock()
-	if err := c.restoreVolumeMounts(ctx, boxId); err != nil {
+	if err := c.restoreVolumeMounts(ctx, boxId, legacy.Volumes); err != nil {
 		if !os.IsNotExist(err) || len(legacy.Volumes) > 0 {
 			return fmt.Errorf("recover: restore original volume mounts: %w", err)
 		}

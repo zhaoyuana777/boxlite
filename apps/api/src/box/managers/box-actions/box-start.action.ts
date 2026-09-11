@@ -63,7 +63,21 @@ export class BoxStartAction extends BoxAction {
   private async recoverOriginalBox(box: Box, lockCode: LockCode): Promise<SyncState> {
     try {
       if (Date.now() - box.recoveryStartedAt.getTime() >= 5 * 60_000) {
-        throw new Error('Recovery timed out')
+        await this.updateBoxState(
+          box,
+          BoxState.ERROR,
+          lockCode,
+          undefined,
+          'Box recovery result is unconfirmed after timeout. Check the original VM before retrying; the earlier operation may still finish. Recovery does not delete or replace the box.',
+          undefined,
+          true,
+        )
+        return DONT_SYNC_AGAIN
+      }
+      // Only the worker receiving the recovery response can confirm success.
+      // A persisted STARTING state cannot prove that its RPC was ever dispatched.
+      if (box.state !== BoxState.STOPPED) {
+        return DONT_SYNC_AGAIN
       }
       const runner = await this.runnerService.findOneOrFail(box.runnerId)
       if (runner.apiVersion === '2') {
@@ -73,27 +87,24 @@ export class BoxStartAction extends BoxAction {
         return DONT_SYNC_AGAIN
       }
       const adapter = await this.runnerAdapterFactory.create(runner)
-      if (box.state === BoxState.STOPPED) {
-        // Persist dispatch before RPC: a crash or ambiguous response must never replay CREATE.
-        if (!(await this.updateBoxState(box, BoxState.STARTING, lockCode))) {
-          return DONT_SYNC_AGAIN
-        }
-        await adapter.recoverBox(box)
-        return SYNC_AGAIN
+      if (!(await this.updateBoxState(box, BoxState.STARTING, lockCode))) {
+        return DONT_SYNC_AGAIN
       }
+      await adapter.recoverBox(box)
       const info = await adapter.boxInfo(box.id)
       if (info.state === BoxState.STARTED) {
         await this.updateBoxState(box, BoxState.STARTED, lockCode, undefined, null, info.daemonVersion, false)
         return DONT_SYNC_AGAIN
-      }
-      if ([BoxState.STARTING, BoxState.STOPPING, BoxState.CREATING, BoxState.RESTORING].includes(info.state)) {
-        return SYNC_AGAIN
       }
       if ([BoxState.UNKNOWN, BoxState.DESTROYED].includes(info.state)) {
         throw new Error('Original box not found during recovery')
       }
       throw new Error(`Original VM reported ${info.state} during recovery`)
     } catch (error) {
+      // A lost response does not prove the runner stopped executing the request.
+      if (['ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'ERR_CANCELED'].includes(error?.code)) {
+        return DONT_SYNC_AGAIN
+      }
       await this.updateBoxState(box, BoxState.ERROR, lockCode, undefined, boxRecoveryError(error), undefined, true)
       return DONT_SYNC_AGAIN
     }

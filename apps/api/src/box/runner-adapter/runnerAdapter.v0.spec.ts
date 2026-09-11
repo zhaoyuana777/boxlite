@@ -68,6 +68,35 @@ describe('RunnerAdapterV0 createBox', () => {
       expect.objectContaining({
         secrets: [{ name: 'openai', value: 'sk-test' }],
       }),
+      { 'axios-retry': { retries: 0 } },
     )
+  })
+})
+
+import axios, { AxiosError } from 'axios'
+
+describe('Recovery transport', () => {
+  it('does not replay non-idempotent recovery after a lost response', async () => {
+    const create = axios.create.bind(axios)
+    let attempts = 0
+    const spy = jest.spyOn(axios, 'create').mockImplementation((options) =>
+      create({
+        ...options,
+        adapter: async (config) => {
+          attempts++
+          // The runner completed the first recovery, but its response was lost.
+          if (attempts === 1) throw new AxiosError('response lost', 'ECONNRESET', config)
+          return { data: 'Box recovered', status: 200, statusText: 'OK', headers: {}, config }
+        },
+      }),
+    )
+    try {
+      const adapter = new RunnerAdapterV0()
+      await adapter.init({ apiUrl: 'http://runner.invalid', apiKey: 'YOUR_API_KEY' } as any)
+      await adapter.recoverBox({ id: 'recovery-test', volumes: [] } as any).catch(() => undefined)
+      expect(attempts).toBe(1)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

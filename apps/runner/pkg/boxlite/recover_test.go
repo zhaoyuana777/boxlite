@@ -5,11 +5,14 @@ package boxlite
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -21,13 +24,37 @@ import (
 )
 
 func TestRecoverPreservesOriginalBox(t *testing.T) {
-	for _, scenario := range []string{"success", "missing", "auto-delete", "stop failure", "start failure", "configured", "missing mount record", "lookup unavailable"} {
+	for _, scenario := range []string{"success", "missing", "auto-delete", "stop failure", "start failure", "configured", "missing mount record", "lookup unavailable", "empty mount record", "partial mount record"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("BOXLITE_API_URL", "http://runner.invalid")
 			t.Setenv("BOXLITE_RUNNER_TOKEN", "YOUR_API_KEY")
 			t.Setenv("RUNNER_DOMAIN", "localhost")
 			if _, err := config.GetConfig(); err != nil {
 				t.Fatal(err)
+			}
+			if scenario == "empty mount record" || scenario == "partial mount record" {
+				runnerConfig, _ := config.GetConfig()
+				previousEnvironment := runnerConfig.Environment
+				runnerConfig.Environment = "development"
+				t.Cleanup(func() { runnerConfig.Environment = previousEnvironment })
+				record := filepath.Join(getVolumeMountRecordDir(), "original-box.json")
+				if err := os.MkdirAll(filepath.Dir(record), 0755); err != nil {
+					t.Fatal(err)
+				}
+				f, err := os.OpenFile(record, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Remove(record) })
+				paths := []string{}
+				if scenario == "partial mount record" {
+					paths = []string{filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+"other-volume")}
+				}
+				err = json.NewEncoder(f).Encode(boxVolumeMountRecord{BoxID: "original-box", Paths: paths})
+				f.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			var mu sync.Mutex
 			var writes []string
@@ -90,7 +117,7 @@ func TestRecoverPreservesOriginalBox(t *testing.T) {
 			client := &Client{runtime: runtime, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), homeDir: t.TempDir(), boxes: make(map[string]*sdk.Box), volumeMutexes: make(map[string]*sync.Mutex), volumeCleanup: volumeCleanupConfig{dryRun: true}, lastVolumeCleanup: time.Now()}
 			defer client.Close()
 			legacy := dto.RecoverBoxDTO{CpuQuota: 99, Env: map[string]string{"IGNORED": "replacement"}}
-			if scenario == "missing mount record" {
+			if scenario == "missing mount record" || scenario == "empty mount record" || scenario == "partial mount record" {
 				legacy.Volumes = []dto.VolumeDTO{{VolumeId: "original-volume", MountPath: "/data"}}
 			}
 			err = client.RecoverBox(context.Background(), "original-box", legacy)
@@ -104,11 +131,14 @@ func TestRecoverPreservesOriginalBox(t *testing.T) {
 			wantWrites := 2
 			if scenario == "missing" || scenario == "auto-delete" || scenario == "configured" || scenario == "lookup unavailable" {
 				wantWrites = 0
-			} else if scenario == "stop failure" || scenario == "missing mount record" {
+			} else if scenario == "stop failure" || (scenario == "missing mount record" || scenario == "empty mount record" || scenario == "partial mount record") {
 				wantWrites = 1
 			}
 			if len(writes) != wantWrites || (err == nil) != (scenario == "success") {
 				t.Fatalf("writes=%v, error=%v; want %d writes, success=%v", writes, err, wantWrites, scenario == "success")
+			}
+			if (scenario == "empty mount record" || scenario == "partial mount record") && !strings.Contains(err.Error(), "mount record") {
+				t.Fatalf("expected rejection of incomplete mount record before attempting mounts: %v", err)
 			}
 			if scenario == "lookup unavailable" && strings.Contains(err.Error(), "not found") {
 				t.Fatal("recovery misreported runtime unavailability as a missing box")
