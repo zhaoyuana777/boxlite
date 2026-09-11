@@ -315,6 +315,7 @@ export class RunnerController {
   }
 
   @Post('healthcheck')
+  @UseGuards(RunnerAuthGuard)
   @ApiOperation({
     summary: 'Runner healthcheck',
     operationId: 'runnerHealthcheck',
