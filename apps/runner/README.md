@@ -102,6 +102,15 @@ instance (FFI wrapper around the Rust runtime). State that needs to survive
 request boundaries — backup progress, artifact build/pull errors — lives in
 the in-process TTL caches under `pkg/cache/`.
 
+Local lifecycle calls (create, start, stop, destroy, recover, export and import)
+are mutually exclusive per box within that Client. Waiting can be cancelled;
+other boxes and other Runner processes remain independent. Recovery holds the
+same gate across destroy and create. Command execution and reads are not gated.
+Archive upload, download and rollback deletion run outside the box gate; every
+migration attempt uses its own temporary directory so overlapping transfers
+cannot overwrite or remove each other's local files. These guards cover Client
+calls, not fencing of timed-out native operations or work on another Runner.
+
 ---
 
 ## Process model

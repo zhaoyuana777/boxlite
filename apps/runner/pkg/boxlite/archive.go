@@ -15,6 +15,12 @@ import (
 // returns the archive path the runtime chose. The caller owns the file — the
 // runtime never deletes it.
 func (c *Client) ExportBox(ctx context.Context, boxId, destDir string) (string, error) {
+	release, err := c.operations.acquire(ctx, boxId)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create export directory %s: %w", destDir, err)
 	}
@@ -42,6 +48,12 @@ func (c *Client) ExportBox(ctx context.Context, boxId, destDir string) (string, 
 // would leave a second box holding the same disk. A box that is already present
 // therefore satisfies the job.
 func (c *Client) ImportBox(ctx context.Context, boxId, archivePath string) error {
+	release, err := c.operations.acquire(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	present, err := c.boxPresent(ctx, boxId)
 	if err != nil {
 		return err

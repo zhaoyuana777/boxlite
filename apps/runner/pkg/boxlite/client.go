@@ -28,6 +28,7 @@ type Client struct {
 	logger             *slog.Logger
 	homeDir            string
 	mu                 sync.RWMutex
+	operations         boxOperations
 	boxes              map[string]*boxlite.Box
 	awsRegion          string
 	awsEndpointUrl     string
@@ -238,6 +239,16 @@ func (c *Client) Close() error {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+	release, err := c.operations.acquire(ctx, boxDto.Id)
+	if err != nil {
+		return "", "", err
+	}
+	defer release()
+	return c.create(ctx, boxDto)
+}
+
+// The caller holds the box gate so RecoverBox can span destroy and create.
+func (c *Client) create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
 	// API sends cores / GB / GB as small integers (see apps/api Box entity).
 	cpus := int(boxDto.CpuQuota)
 	if cpus < 1 {
@@ -360,6 +371,12 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 
 // Start starts a stopped box and returns the runtime version.
 func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
+	release, err := c.operations.acquire(ctx, boxId)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
 		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
 	}
@@ -376,6 +393,12 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 
 // Stop stops a running box.
 func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
+	release, err := c.operations.acquire(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return err
@@ -390,6 +413,15 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 
 // Destroy removes a box entirely.
 func (c *Client) Destroy(ctx context.Context, boxId string) error {
+	release, err := c.operations.acquire(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return c.destroy(ctx, boxId)
+}
+
+func (c *Client) destroy(ctx context.Context, boxId string) error {
 	c.mu.Lock()
 	if bx, ok := c.boxes[boxId]; ok {
 		bx.Close()
@@ -620,7 +652,7 @@ func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box,
 // have replaced it, and unmapping the winner would drop a live entry.
 //
 // It deliberately does not Close the handle. getOrFetchBox hands the same
-// *boxlite.Box to every caller and the runner serializes nothing per box, so
+// *boxlite.Box to every caller including concurrent readers and executions, so
 // freeing here would pull the FFI handle out from under a goroutine mid-call.
 // An unmapped handle is instead leaked for the process lifetime — Close only
 // frees what is still in the map. The cost is one handle per request that finds
