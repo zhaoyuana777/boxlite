@@ -114,7 +114,8 @@ calls, not fencing of timed-out native operations or work on another Runner.
 Recovery preserves the Runtime ID, name, persisted configuration and existing
 disk files. It restarts the VM process; it does not restore RAM or unsaved writes.
 The legacy recovery DTO does not override the saved VM configuration. Existing
-volume mount records are reused; a missing required record is an error.
+volume mount records are reused and checked against the control plane's saved
+volume list; missing, empty or incomplete required records are errors.
 Recovery refuses auto-delete boxes and never falls back to remove/create when
 the original box, disk or mount is unavailable. Failed recovery leaves the
 original resources available for diagnosis and retry.
@@ -128,6 +129,12 @@ Missing files, permission errors, explicit corruption and timeouts have separate
 guidance. Unknown failures require runner-log inspection. Administrators must
 explicitly choose rebuilding or restoring a backup. Runner API v2 recovery
 remains unsupported.
+
+Only a worker that receives the recovery response can confirm success. If that
+worker is lost or its response is ambiguous, other workers leave recovery pending
+until the confirmation deadline, then report an **unconfirmed result**. Check the
+original VM before manually retrying: the earlier operation may still finish.
+Recovery HTTP requests are never automatically retried after a lost response.
 
 ---
 

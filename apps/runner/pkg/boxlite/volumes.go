@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -110,7 +111,7 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 	return volumeMounts, nil
 }
 
-func (c *Client) restoreVolumeMounts(ctx context.Context, boxID string) error {
+func (c *Client) restoreVolumeMounts(ctx context.Context, boxID string, required []dto.VolumeDTO) error {
 	data, err := os.ReadFile(filepath.Join(getVolumeMountRecordDir(), boxID+".json"))
 	if err != nil {
 		return err
@@ -121,6 +122,16 @@ func (c *Client) restoreVolumeMounts(ctx context.Context, boxID string) error {
 	}
 	if record.BoxID != boxID {
 		return fmt.Errorf("volume mount record does not belong to original box")
+	}
+	// Records are only written for boxes with volumes. An empty record is invalid.
+	if len(record.Paths) == 0 {
+		return fmt.Errorf("empty volume mount record")
+	}
+	for _, volume := range required {
+		expected := filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+volume.VolumeId)
+		if !slices.Contains(record.Paths, expected) {
+			return fmt.Errorf("required volume is missing from mount record")
+		}
 	}
 	for _, path := range record.Paths {
 		if filepath.Dir(path) != getVolumeMountBasePath() || !strings.HasPrefix(filepath.Base(path), volumeMountPrefix) {

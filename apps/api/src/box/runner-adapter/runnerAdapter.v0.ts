@@ -348,6 +348,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       networkAllowList: box.networkAllowList,
       errorReason: box.errorReason,
     }
-    await this.boxApiClient.recover(box.id, recoverBoxDTO)
+    // Restart is not idempotent: a lost response must not restart the VM twice.
+    await this.boxApiClient.recover(box.id, recoverBoxDTO, { 'axios-retry': { retries: 0 } })
   }
 }
