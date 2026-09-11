@@ -123,11 +123,14 @@ the in-process TTL caches under `pkg/cache/`.
      authoritative**, the API is the replica being corrected.
    - `metrics.Collector.Start` — periodic CPU and allocation sampling
      for the `/info` and `/metrics` endpoints (see _Metrics_).
-   - `healthcheck.Service.Start` and `poller.Service.Start` — only if
-     `BOXLITE_API_VERSION=2`. These push health and pull jobs from the
-     control plane.
-4. **`api.ApiServer.Start`** registers routes and binds the HTTP
-   listener. Synchronous; blocks the main goroutine until SIGTERM.
+4. **`api.ApiServer.Start`** registers routes, loads TLS certificates when
+   enabled, and binds the HTTP listener synchronously. Startup errors return
+   immediately; on success, HTTP serving continues in the background and a
+   channel reports its eventual exit.
+5. **`healthcheck.Service.Start` and `poller.Service.Start`** are spawned
+   only after API startup succeeds, and only if `API_VERSION=2`. This prevents
+   reporting the runner as READY or claiming jobs before its API is listening.
+   The main goroutine then waits for the API to exit or for a shutdown signal.
 
 On `SIGTERM` the API server is given 5 s to drain (`Shutdown`), the
 context cancels, every background loop returns, and `boxlite.Client.Close()`

@@ -17,6 +17,7 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -77,16 +78,13 @@ type ApiServer struct {
 	logRequests bool
 }
 
-func (a *ApiServer) Start(ctx context.Context) error {
+// Start loads the TLS configuration and binds the listener before returning.
+// The returned channel reports one Serve result and then closes.
+func (a *ApiServer) Start(ctx context.Context) (<-chan error, error) {
 	docs.SwaggerInfo.Description = "BoxLite Runner API"
 	docs.SwaggerInfo.Title = "BoxLite Runner API"
 	docs.SwaggerInfo.BasePath = "/"
 	docs.SwaggerInfo.Version = internal.Version
-
-	_, err := net.Dial("tcp", fmt.Sprintf(":%d", a.apiPort))
-	if err == nil {
-		return fmt.Errorf("cannot start API server, port %d is already in use", a.apiPort)
-	}
 
 	binding.Validator = new(DefaultValidator)
 
@@ -165,23 +163,33 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		Handler: a.router,
 	}
 
-	listener, err := net.Listen("tcp", a.httpServer.Addr)
-	if err != nil {
-		return err
+	if a.enableTLS {
+		certificate, err := tls.LoadX509KeyPair(a.tlsCertFile, a.tlsKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load API TLS certificate: %w", err)
+		}
+		a.httpServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{certificate}}
 	}
 
-	errChan := make(chan error)
+	listener, err := net.Listen("tcp", a.httpServer.Addr)
+	if err != nil {
+		return nil, fmt.Errorf("listen on API address %s: %w", a.httpServer.Addr, err)
+	}
+
+	// main may be shutting down instead of receiving the Serve result.
+	errChan := make(chan error, 1)
 	go func() {
+		defer close(errChan)
+		defer listener.Close()
 		if a.enableTLS {
-			// Start HTTPS server
-			errChan <- a.httpServer.ServeTLS(listener, a.tlsCertFile, a.tlsKeyFile)
+			// Use the certificate already validated during startup.
+			errChan <- a.httpServer.ServeTLS(listener, "", "")
 		} else {
-			// Start HTTP server
 			errChan <- a.httpServer.Serve(listener)
 		}
 	}()
 
-	return <-errChan
+	return errChan, nil
 }
 
 func (a *ApiServer) Stop() {

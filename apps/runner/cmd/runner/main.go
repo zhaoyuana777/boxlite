@@ -6,7 +6,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -162,8 +164,10 @@ func run() int {
 
 	boxBackend := backend.NewBoxliteAdapter(boxliteClient)
 
+	var healthcheckService *healthcheck.Service
+	var pollerService *poller.Service
 	if cfg.ApiVersion == 2 {
-		healthcheckService, err := healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
+		healthcheckService, err = healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
 			Interval:   cfg.HealthcheckInterval,
 			Timeout:    cfg.HealthcheckTimeout,
 			Collector:  metricsCollector,
@@ -179,11 +183,6 @@ func run() int {
 			return 2
 		}
 
-		go func() {
-			logger.Info("Starting healthcheck service")
-			healthcheckService.Start(ctx)
-		}()
-
 		executorService, err := executor.NewExecutor(&executor.ExecutorConfig{
 			Logger:         logger,
 			Backend:        boxBackend,
@@ -196,7 +195,7 @@ func run() int {
 			return 2
 		}
 
-		pollerService, err := poller.NewService(&poller.PollerServiceConfig{
+		pollerService, err = poller.NewService(&poller.PollerServiceConfig{
 			PollTimeout: cfg.PollTimeout,
 			PollLimit:   cfg.PollLimit,
 			Logger:      logger,
@@ -206,11 +205,6 @@ func run() int {
 			logger.Error("Failed to create poller service", "error", err)
 			return 2
 		}
-
-		go func() {
-			logger.Info("Starting poller service")
-			pollerService.Start(ctx)
-		}()
 	}
 
 	apiServer := api.NewApiServer(api.ApiServerConfig{
@@ -223,18 +217,33 @@ func run() int {
 		LogRequests: cfg.ApiLogRequests,
 	})
 
-	apiServerErrChan := make(chan error)
+	apiServerErrChan, err := apiServer.Start(ctx)
+	if err != nil {
+		logger.Error("Failed to start API server", "error", err)
+		return 1
+	}
 
-	go func() {
-		err := apiServer.Start(ctx)
-		apiServerErrChan <- err
-	}()
+	// Health reports make the runner READY in the control plane. Bind the API
+	// before advertising readiness or claiming jobs that clients can act on.
+	if cfg.ApiVersion == 2 {
+		go func() {
+			logger.Info("Starting healthcheck service")
+			healthcheckService.Start(ctx)
+		}()
+		go func() {
+			logger.Info("Starting poller service")
+			pollerService.Start(ctx)
+		}()
+	}
 
 	interruptChannel := make(chan os.Signal, 1)
 	signal.Notify(interruptChannel, os.Interrupt, syscall.SIGTERM)
 
 	select {
 	case err := <-apiServerErrChan:
+		if errors.Is(err, http.ErrServerClosed) {
+			return 0
+		}
 		logger.Error("API server error", "error", err)
 		return 1
 	case <-interruptChannel:
