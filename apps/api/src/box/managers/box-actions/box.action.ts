@@ -38,7 +38,7 @@ export abstract class BoxAction {
     errorReason?: string,
     daemonVersion?: string,
     recoverable?: boolean,
-  ) {
+  ): Promise<boolean> {
     //  check if the lock code is still valid
     const lockKey = getStateChangeLockKey(box.id)
     const currentLockCode = await this.redisLockProvider.getCode(lockKey)
@@ -47,20 +47,20 @@ export abstract class BoxAction {
       this.logger.warn(
         `no lock code found - state update action expired - skipping - boxId: ${box.id} - state: ${state}`,
       )
-      return
+      return false
     }
 
     if (expectedLockCode.getCode() !== currentLockCode.getCode()) {
       this.logger.warn(
         `lock code mismatch - state update action expired - skipping - boxId: ${box.id} - state: ${state}`,
       )
-      return
+      return false
     }
 
     if (!box.pending) {
       const err = new Error(`box ${box.id} is not in a pending state`)
       this.logger.error(err)
-      return
+      return false
     }
 
     const updateData: Partial<Box> = {
@@ -92,5 +92,6 @@ export abstract class BoxAction {
     }
 
     await this.boxRepository.update(box.id, { updateData, entity: box })
+    return true
   }
 }

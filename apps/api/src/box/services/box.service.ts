@@ -1038,33 +1038,22 @@ export class BoxService {
       throw new ForbiddenException('Recovering boxes with runner API version 2 is not supported')
     }
 
-    const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-
-    try {
-      await runnerAdapter.recoverBox(box)
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('storage cannot be further expanded')) {
-        const errorMsg = `Box storage cannot be further expanded. Maximum expansion of ${(box.disk * 0.1).toFixed(2)}GB (10% of original ${box.disk.toFixed(2)}GB) has been reached. Please contact support for further assistance.`
-        throw new ForbiddenException(errorMsg)
-      }
-      throw error
-    }
+    this.organizationService.assertOrganizationIsNotSuspended(organization)
 
     const updateData: Partial<Box> = {
       state: BoxState.STOPPED,
-      desiredState: BoxDesiredState.STOPPED,
-      errorReason: null,
-      recoverable: false,
+      desiredState: BoxDesiredState.STARTED,
+      recoveryStartedAt: new Date(),
+      pending: true,
     }
 
-    await this.boxRepository.updateWhere(box.id, {
+    const updatedBox = await this.boxRepository.updateWhere(box.id, {
       updateData,
-      whereCondition: { state: BoxState.ERROR },
+      whereCondition: { state: BoxState.ERROR, pending: false },
     })
 
-    // Now that box is in STOPPED state, use the normal start flow
-    // This handles state validation and event emission.
-    return await this.start(box.id, organization)
+    this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
+    return updatedBox
   }
 
   async updatePublicStatus(boxIdOrName: string, isPublic: boolean, organizationId?: string): Promise<Box> {
@@ -1333,6 +1322,11 @@ export class BoxService {
 
     if (!box) {
       throw new NotFoundException(`Box with ID ${boxId} not found`)
+    }
+
+    // Recovery owns its transitions; an old VM's heartbeat must not complete it.
+    if (box.recoveryStartedAt) {
+      return
     }
 
     if (box.state === newState) {

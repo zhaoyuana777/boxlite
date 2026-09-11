@@ -17,6 +17,7 @@ import { TypedConfigService } from '../../../config/typed-config.service'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
 import { WithSpan } from '../../../common/decorators/otel.decorator'
 import { BoxActivityService } from '../../services/box-activity.service'
+import { boxRecoveryError } from '../../utils/box-recovery-error.util'
 
 @Injectable()
 export class BoxStartAction extends BoxAction {
@@ -35,6 +36,9 @@ export class BoxStartAction extends BoxAction {
 
   @WithSpan()
   async run(box: Box, lockCode: LockCode): Promise<SyncState> {
+    if (box.recoveryStartedAt) {
+      return this.recoverOriginalBox(box, lockCode)
+    }
     switch (box.state) {
       case BoxState.UNKNOWN: {
         return this.handleRunnerBoxUnknownStateOnDesiredStateStart(box, lockCode)
@@ -54,6 +58,45 @@ export class BoxStartAction extends BoxAction {
     }
 
     return DONT_SYNC_AGAIN
+  }
+
+  private async recoverOriginalBox(box: Box, lockCode: LockCode): Promise<SyncState> {
+    try {
+      if (Date.now() - box.recoveryStartedAt.getTime() >= 5 * 60_000) {
+        throw new Error('Recovery timed out')
+      }
+      const runner = await this.runnerService.findOneOrFail(box.runnerId)
+      if (runner.apiVersion === '2') {
+        throw new Error('Recovery is unsupported on runner API version 2')
+      }
+      if (runner.state !== RunnerState.READY) {
+        return DONT_SYNC_AGAIN
+      }
+      const adapter = await this.runnerAdapterFactory.create(runner)
+      if (box.state === BoxState.STOPPED) {
+        // Persist dispatch before RPC: a crash or ambiguous response must never replay CREATE.
+        if (!(await this.updateBoxState(box, BoxState.STARTING, lockCode))) {
+          return DONT_SYNC_AGAIN
+        }
+        await adapter.recoverBox(box)
+        return SYNC_AGAIN
+      }
+      const info = await adapter.boxInfo(box.id)
+      if (info.state === BoxState.STARTED) {
+        await this.updateBoxState(box, BoxState.STARTED, lockCode, undefined, null, info.daemonVersion, false)
+        return DONT_SYNC_AGAIN
+      }
+      if ([BoxState.STARTING, BoxState.STOPPING, BoxState.CREATING, BoxState.RESTORING].includes(info.state)) {
+        return SYNC_AGAIN
+      }
+      if ([BoxState.UNKNOWN, BoxState.DESTROYED].includes(info.state)) {
+        throw new Error('Original box not found during recovery')
+      }
+      throw new Error(`Original VM reported ${info.state} during recovery`)
+    } catch (error) {
+      await this.updateBoxState(box, BoxState.ERROR, lockCode, undefined, boxRecoveryError(error), undefined, true)
+      return DONT_SYNC_AGAIN
+    }
   }
 
   private async handleRunnerBoxUnknownStateOnDesiredStateStart(box: Box, lockCode: LockCode): Promise<SyncState> {

@@ -6,13 +6,17 @@ package boxlite
 
 import (
 	"context"
+	"fmt"
+	"os"
 
+	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/containerd/errdefs"
 )
 
-// RecoverBox destroys and recreates a box.
-func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error {
+// RecoverBox restarts the original VM using its persisted configuration and disks.
+// The legacy DTO is retained for wire compatibility, not used to rebuild the box.
+func (c *Client) RecoverBox(ctx context.Context, boxId string, legacy dto.RecoverBoxDTO) error {
 	release, err := c.operations.acquire(ctx, boxId)
 	if err != nil {
 		return err
@@ -21,33 +25,43 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 
 	c.logger.Info("recover box", "box", boxId)
 
-	if err := c.destroy(ctx, boxId); err != nil {
-		c.logger.Warn("failed to destroy during recover", "error", err)
+	bx, err := c.getOrFetchBox(ctx, boxId)
+	if err != nil {
+		return fmt.Errorf("recover: locate original box: %w", err)
 	}
-
-	_, _, err = c.create(ctx, recoverCreateDto(boxId, recoverDto))
-	return err
-}
-
-// recoverCreateDto rebuilds the create request RecoverBox hands to Create by
-// hand. Extracted as a pure function so the copy is testable without a live
-// runtime: a field not copied here is silently lost on a recovered box.
-func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxDTO {
-	return dto.CreateBoxDTO{
-		Id:               boxId,
-		Image:            "alpine:latest",
-		OsUser:           recoverDto.OsUser,
-		CpuQuota:         recoverDto.CpuQuota,
-		GpuQuota:         recoverDto.GpuQuota,
-		MemoryQuota:      recoverDto.MemoryQuota,
-		StorageQuota:     recoverDto.StorageQuota,
-		Env:              recoverDto.Env,
-		Volumes:          recoverDto.Volumes,
-		Secrets:          recoverDto.Secrets,
-		NetworkBlockAll:  recoverDto.NetworkBlockAll,
-		NetworkAllowList: recoverDto.NetworkAllowList,
-		FromVolumeId:     recoverDto.FromVolumeId,
+	info, err := bx.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("recover: inspect original box: %w", err)
 	}
+	if info.AutoDelete != 0 {
+		return fmt.Errorf("recover: auto-delete box cannot be restarted without losing its disk")
+	}
+	switch info.State {
+	case boxlite.StateRunning, boxlite.StateStopped, boxlite.StateFailed:
+	default:
+		return fmt.Errorf("recover: original box is in unsupported state %s", info.State)
+	}
+	if err := bx.Stop(ctx); err != nil {
+		return fmt.Errorf("recover: stop original VM: %w", err)
+	}
+	// Stop consumes the runtime handle. Fetch by immutable ID, never GetOrCreate.
+	c.evictBox(boxId, bx)
+	bx, err = c.runtime.Get(ctx, info.ID)
+	if err != nil {
+		return fmt.Errorf("recover: reload original box: %w", err)
+	}
+	c.mu.Lock()
+	c.boxes[boxId] = bx
+	c.mu.Unlock()
+	if err := c.restoreVolumeMounts(ctx, boxId); err != nil {
+		if !os.IsNotExist(err) || len(legacy.Volumes) > 0 {
+			return fmt.Errorf("recover: restore original volume mounts: %w", err)
+		}
+	}
+	if err := bx.Start(ctx); err != nil {
+		return fmt.Errorf("recover: start original VM: %w", err)
+	}
+	return nil
 }
 
 // UpdateNetworkSettings updates the network allowlist/blocklist for a box.
