@@ -110,6 +110,29 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 	return volumeMounts, nil
 }
 
+func (c *Client) restoreVolumeMounts(ctx context.Context, boxID string) error {
+	data, err := os.ReadFile(filepath.Join(getVolumeMountRecordDir(), boxID+".json"))
+	if err != nil {
+		return err
+	}
+	var record boxVolumeMountRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return err
+	}
+	if record.BoxID != boxID {
+		return fmt.Errorf("volume mount record does not belong to original box")
+	}
+	for _, path := range record.Paths {
+		if filepath.Dir(path) != getVolumeMountBasePath() || !strings.HasPrefix(filepath.Base(path), volumeMountPrefix) {
+			return fmt.Errorf("invalid original volume mount path")
+		}
+		if err := c.ensureVolumeFuseMounted(ctx, filepath.Base(path), path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID string, metadata map[string]string) error {
 	if metadata == nil {
 		return nil

@@ -123,6 +123,10 @@ export class Box {
   @Column({ default: false, type: 'boolean' })
   recoverable = false
 
+  // Recovery intent must survive API restarts so UNKNOWN never falls back to CREATE.
+  @Column({ type: 'timestamptz', nullable: true })
+  recoveryStartedAt?: Date | null
+
   @Column({
     type: 'jsonb',
     default: {},
@@ -286,6 +290,19 @@ export class Box {
 
   private getInvariantChanges(): Partial<Box> {
     const changes: Partial<Box> = {}
+
+    if (
+      this.recoveryStartedAt &&
+      (this.state === BoxState.STARTED ||
+        this.state === BoxState.ERROR ||
+        this.desiredState !== BoxDesiredState.STARTED)
+    ) {
+      changes.recoveryStartedAt = null
+      if (this.state === BoxState.STARTED) {
+        changes.errorReason = null
+        changes.recoverable = false
+      }
+    }
 
     if (!this.pending && String(this.state) !== String(this.desiredState)) {
       changes.pending = true

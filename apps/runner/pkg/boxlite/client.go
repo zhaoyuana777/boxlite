@@ -247,7 +247,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	return c.create(ctx, boxDto)
 }
 
-// The caller holds the box gate so RecoverBox can span destroy and create.
+// The caller holds the box gate throughout creation.
 func (c *Client) create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
 	// API sends cores / GB / GB as small integers (see apps/api Box entity).
 	cpus := int(boxDto.CpuQuota)
@@ -637,7 +637,7 @@ func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box,
 
 	bx, err := c.runtime.Get(ctx, boxId)
 	if err != nil {
-		return nil, fmt.Errorf("box %s not found: %w", boxId, err)
+		return nil, fmt.Errorf("get box %s: %w", boxId, err)
 	}
 
 	c.mu.Lock()

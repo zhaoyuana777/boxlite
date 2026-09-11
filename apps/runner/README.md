@@ -105,11 +105,29 @@ the in-process TTL caches under `pkg/cache/`.
 Local lifecycle calls (create, start, stop, destroy, recover, export and import)
 are mutually exclusive per box within that Client. Waiting can be cancelled;
 other boxes and other Runner processes remain independent. Recovery holds the
-same gate across destroy and create. Command execution and reads are not gated.
+same gate across stop, reload and start of the original Runtime box. Command execution and reads are not gated.
 Archive upload, download and rollback deletion run outside the box gate; every
 migration attempt uses its own temporary directory so overlapping transfers
 cannot overwrite or remove each other's local files. These guards cover Client
 calls, not fencing of timed-out native operations or work on another Runner.
+
+Recovery preserves the Runtime ID, name, persisted configuration and existing
+disk files. It restarts the VM process; it does not restore RAM or unsaved writes.
+The legacy recovery DTO does not override the saved VM configuration. Existing
+volume mount records are reused; a missing required record is an error.
+Recovery refuses auto-delete boxes and never falls back to remove/create when
+the original box, disk or mount is unavailable. Failed recovery leaves the
+original resources available for diagnosis and retry.
+
+The control plane persists recovery intent before dispatch and reports that
+recovery has **started**, then confirms the VM state asynchronously. It retains
+the previous error until success, or replaces it with a recovery failure and
+next steps. Space/quota errors advise checking host capacity and guest storage;
+they do not automatically resize disks or identify the affected filesystem.
+Missing files, permission errors, explicit corruption and timeouts have separate
+guidance. Unknown failures require runner-log inspection. Administrators must
+explicitly choose rebuilding or restoring a backup. Runner API v2 recovery
+remains unsupported.
 
 ---
 
@@ -158,7 +176,7 @@ crash handling live in the runtime, not the runner.
 | `POST` | `/boxes/:id/start` | `Start` | Boot a stopped box (optional auth token + metadata) |
 | `POST` | `/boxes/:id/stop` | `Stop` | Graceful or `force` shutdown |
 | `POST` | `/boxes/:id/destroy` | `Destroy` | Tear down completely |
-| `POST` | `/boxes/:id/recover` | `Recover` | Bring an `error` box back via a named strategy |
+| `POST` | `/boxes/:id/recover` | `Recover` | Restart the original VM while retaining its disks and configuration |
 | `POST` | `/boxes/:id/is-recoverable` | `IsRecoverable` | Static check against `common.IsRecoverable(reason)` |
 | `POST` | `/boxes/:id/network-settings` | `UpdateNetworkSettings` | Set block-all / allow-list |
 | `POST` | `/boxes/:id/backup` | `CreateBackup` | Kick off async backup; updates `BackupInfoCache` |
