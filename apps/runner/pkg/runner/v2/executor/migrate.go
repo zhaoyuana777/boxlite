@@ -47,11 +47,16 @@ func (e *Executor) exportBox(ctx context.Context, job *apiclient.Job) (any, erro
 		return nil, err
 	}
 
-	archivePath, err := e.backend.ExportBox(ctx, job.ResourceId, e.migrateWorkDir)
+	workDir, err := e.newMigrationWorkDir()
 	if err != nil {
 		return nil, err
 	}
-	defer e.removeLocalArchive(ctx, archivePath)
+	defer e.removeMigrationWorkDir(ctx, workDir)
+
+	archivePath, err := e.backend.ExportBox(ctx, job.ResourceId, workDir)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := store.Upload(ctx, payload.ArcPath, archivePath); err != nil {
 		return nil, err
@@ -72,15 +77,16 @@ func (e *Executor) importBox(ctx context.Context, job *apiclient.Job) (any, erro
 		return nil, err
 	}
 
-	if err := os.MkdirAll(e.migrateWorkDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create migration directory %s: %w", e.migrateWorkDir, err)
+	workDir, err := e.newMigrationWorkDir()
+	if err != nil {
+		return nil, err
 	}
+	defer e.removeMigrationWorkDir(ctx, workDir)
 
-	archivePath := filepath.Join(e.migrateWorkDir, job.ResourceId+migrateArchiveSuffix)
+	archivePath := filepath.Join(workDir, "archive"+migrateArchiveSuffix)
 	if err := store.Download(ctx, payload.ArcPath, archivePath); err != nil {
 		return nil, err
 	}
-	defer e.removeLocalArchive(ctx, archivePath)
 
 	if err := e.backend.ImportBox(ctx, job.ResourceId, archivePath); err != nil {
 		return nil, err
@@ -163,11 +169,17 @@ func (e *Executor) requireMigrationSetup() (storage.ArchiveStore, error) {
 	return e.archiveStore, nil
 }
 
-// removeLocalArchive drops the runner's copy once the object store holds it (or
-// the box does). A leftover archive is disk the runner never reclaims, but its
-// removal failing does not undo the work the job just did, so it only logs.
-func (e *Executor) removeLocalArchive(ctx context.Context, archivePath string) {
-	if err := os.Remove(archivePath); err != nil && !os.IsNotExist(err) {
-		e.log.WarnContext(ctx, "failed to remove local migration archive", "path", archivePath, "error", err)
+// Each attempt owns its files even when a replay overlaps an earlier transfer.
+func (e *Executor) newMigrationWorkDir() (string, error) {
+	if err := os.MkdirAll(e.migrateWorkDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create migration directory %s: %w", e.migrateWorkDir, err)
+	}
+	return os.MkdirTemp(e.migrateWorkDir, "job-")
+}
+
+// Cleanup failure must not undo a successful export or import.
+func (e *Executor) removeMigrationWorkDir(ctx context.Context, workDir string) {
+	if err := os.RemoveAll(workDir); err != nil {
+		e.log.WarnContext(ctx, "failed to remove local migration work directory", "path", workDir, "error", err)
 	}
 }

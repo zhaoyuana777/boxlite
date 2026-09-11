@@ -13,13 +13,19 @@ import (
 
 // RecoverBox destroys and recreates a box.
 func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.RecoverBoxDTO) error {
+	release, err := c.operations.acquire(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	c.logger.Info("recover box", "box", boxId)
 
-	if err := c.Destroy(ctx, boxId); err != nil {
+	if err := c.destroy(ctx, boxId); err != nil {
 		c.logger.Warn("failed to destroy during recover", "error", err)
 	}
 
-	_, _, err := c.Create(ctx, recoverCreateDto(boxId, recoverDto))
+	_, _, err = c.create(ctx, recoverCreateDto(boxId, recoverDto))
 	return err
 }
 
