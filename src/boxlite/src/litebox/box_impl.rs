@@ -680,6 +680,14 @@ impl BoxImpl {
         // Note: We check status, not shutdown_token, because the token may be cancelled
         // by runtime.shutdown() before stop() is called on each box.
         if self.state.read().status == BoxStatus::Stopped {
+            #[cfg(feature = "cloud-runner")]
+            self.runtime.release_overlaybd_async(self.id()).await?;
+            if self.config.options.removes_on_stop() {
+                match self.runtime.remove_box(self.id(), false) {
+                    Err(BoxliteError::NotFound(_)) => {}
+                    result => result?,
+                }
+            }
             return Ok(());
         }
 
@@ -812,6 +820,10 @@ impl BoxImpl {
             .runtime_metrics
             .boxes_stopped
             .fetch_add(1, Ordering::Relaxed);
+
+        // The box is already stopped even if device cleanup needs a retry.
+        #[cfg(feature = "cloud-runner")]
+        self.runtime.release_overlaybd_async(self.id()).await?;
 
         // Apply the configured remove-on-stop policy.
         if self.config.options.removes_on_stop() {
