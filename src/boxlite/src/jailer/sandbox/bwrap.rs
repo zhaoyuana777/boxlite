@@ -120,7 +120,25 @@ impl Sandbox for BwrapSandbox {
             tracing::debug!(path = %pa.path.display(), "bwrap: bind (rw)");
         }
         for pa in ctx.readonly_paths() {
-            bwrap_cmd.ro_bind(&pa.path, &pa.path);
+            use std::os::unix::fs::FileTypeExt;
+            if pa.path.parent() == Some(std::path::Path::new("/dev"))
+                && pa
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| {
+                        n.strip_prefix("ublkb").is_some_and(|id| {
+                            !id.is_empty() && id.bytes().all(|c| c.is_ascii_digit())
+                        })
+                    })
+                && std::fs::metadata(&pa.path).is_ok_and(|m| m.file_type().is_block_device())
+            {
+                // --ro-bind adds MS_NODEV. OverlayBD validates kernel read-only
+                // state before exposing this one node; Landlock also stays read-only.
+                bwrap_cmd.dev_bind(&pa.path, &pa.path);
+            } else {
+                bwrap_cmd.ro_bind(&pa.path, &pa.path);
+            }
             tracing::debug!(path = %pa.path.display(), "bwrap: ro-bind");
         }
 
@@ -178,6 +196,39 @@ impl Sandbox for BwrapSandbox {
 mod tests {
     use super::*;
     use crate::runtime::advanced_options::ResourceLimits;
+
+    #[test]
+    fn apply_keeps_non_ublk_paths_nodev() {
+        let limits = ResourceLimits::default();
+        for path in [
+            "/tmp/image",
+            "/dev/null",
+            "/dev/ublkb",
+            "/dev/ublkb-invalid",
+            "/dev/ublkb4294967295",
+        ] {
+            let ctx = SandboxContext {
+                id: "test-box",
+                paths: vec![super::super::PathAccess {
+                    path: path.into(),
+                    writable: false,
+                }],
+                unix_sockets: Default::default(),
+                resource_limits: &limits,
+                network_enabled: false,
+                sandbox_profile: None,
+                detached: false,
+            };
+            let mut cmd = Command::new("/box/bin/boxlite-shim");
+            BwrapSandbox::new().apply(&ctx, &mut cmd);
+            let args: Vec<_> = cmd.get_args().collect();
+            assert!(
+                args.windows(3).any(|a| a == ["--ro-bind", path, path]),
+                "{path}: {args:?}"
+            );
+            assert!(!args.windows(3).any(|a| a == ["--dev-bind", path, path]));
+        }
+    }
 
     /// The shim is statically linked, so libkrun's `dlopen` of `libkrunfw.so.5`
     /// can only be satisfied via `LD_LIBRARY_PATH` inside the `--clearenv`

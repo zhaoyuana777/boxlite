@@ -19,62 +19,225 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 pub struct ContainerRootfsTask;
 
+#[cfg(all(test, feature = "cloud-runner"))]
+mod tests {
+    use super::*;
+    use crate::litebox::config::RootfsBackend;
+    use crate::litebox::init::types::InitPipelineContext;
+    use crate::runtime::options::{BoxOptions, BoxliteOptions};
+    use crate::runtime::rt_impl::RuntimeImpl;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn rootfs_task_preserves_restart_disk_and_applies_overrides() {
+        let (dir, _, reference) = crate::images::overlaybd::tests::fixture();
+        let source = dir.path().join("source");
+        std::fs::write(
+            source.join("oci-layout"),
+            r#"{"imageLayoutVersion":"1.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("index.json"),
+            json!({"schemaVersion": 2, "manifests": [{
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": reference.split('@').nth(1).unwrap(), "size": 0
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: dir.path().join("runtime"),
+            image_registries: vec![],
+        })
+        .unwrap();
+        for empty in [false, true] {
+            let handle = runtime
+                .create(
+                    BoxOptions {
+                        rootfs: RootfsSpec::RootfsPath(source.to_str().unwrap().into()),
+                        auto_delete: Some(0),
+                        env: vec![("MODE".into(), "override".into())],
+                        entrypoint: Some(if empty {
+                            vec![]
+                        } else {
+                            vec!["/bin/sh".into()]
+                        }),
+                        cmd: Some(if empty { vec![] } else { vec!["-c".into()] }),
+                        user: Some("123:456".into()),
+                        working_dir: Some("/work".into()),
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+            let (config, _) = runtime.box_manager.box_by_id(handle.id()).unwrap().unwrap();
+            let mut context = InitPipelineContext::new(config, runtime.clone(), true, false);
+            let layout = runtime
+                .layout
+                .box_layout(handle.id().as_str(), false)
+                .unwrap();
+            layout.prepare().unwrap();
+            let backing = dir.path().join("backing");
+            std::fs::write(&backing, vec![0; 65536]).unwrap();
+            Qcow2Helper::create_cow_child_disk(
+                &backing,
+                BackingFormat::Raw,
+                &layout.disk_path(),
+                65536,
+            )
+            .unwrap()
+            .leak();
+            let before = std::fs::read(layout.disk_path()).unwrap();
+            context.layout = Some(layout.clone());
+            let ctx = Arc::new(tokio::sync::Mutex::new(context));
+            Box::new(ContainerRootfsTask)
+                .run(ctx.clone())
+                .await
+                .unwrap();
+            let mut context = ctx.lock().await;
+            let image = context.container_image_config.as_ref().unwrap();
+            assert_eq!(
+                image.entrypoint,
+                context.config.options.entrypoint.as_ref().unwrap().clone()
+            );
+            assert_eq!(
+                image.cmd,
+                context.config.options.cmd.as_ref().unwrap().clone()
+            );
+            assert_eq!(image.user, "123:456");
+            assert_eq!(image.working_dir, "/work");
+            assert_eq!(image.env, ["MODE=override"]);
+            assert_eq!(
+                context.container_disk.as_ref().unwrap().path(),
+                layout.disk_path()
+            );
+            assert_eq!(std::fs::read(layout.disk_path()).unwrap(), before);
+            assert!(context.guard.overlaybd_lease.is_none());
+            context.guard.disarm();
+        }
+    }
+
+    #[tokio::test]
+    async fn overlaybd_rootfs_task_rejects_incompatible_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: dir.path().into(),
+            image_registries: vec![],
+        })
+        .unwrap();
+        let handle = runtime.create(BoxOptions::default(), None).await.unwrap();
+        let (mut config, _) = runtime.box_manager.box_by_id(handle.id()).unwrap().unwrap();
+        config.rootfs_backend = RootfsBackend::Overlaybd;
+        for (rootfs, message) in [
+            (
+                RootfsSpec::RootfsPath("/unused".into()),
+                "requires an image reference",
+            ),
+            (
+                RootfsSpec::Image("example.test/image:latest".into()),
+                "requires the cloud runner",
+            ),
+        ] {
+            config.options.rootfs = rootfs;
+            let mut context =
+                InitPipelineContext::new(config.clone(), runtime.clone(), false, false);
+            context.layout = Some(
+                runtime
+                    .layout
+                    .box_layout(handle.id().as_str(), false)
+                    .unwrap(),
+            );
+            let ctx = Arc::new(tokio::sync::Mutex::new(context));
+            let error = Box::new(ContainerRootfsTask)
+                .run(ctx.clone())
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
+            let mut context = ctx.lock().await;
+            assert!(context.container_image_config.is_none() && context.container_disk.is_none());
+            assert!(context.guard.overlaybd_lease.is_none());
+            context.guard.disarm();
+        }
+    }
+}
+
 #[async_trait]
 impl PipelineTask<InitCtx> for ContainerRootfsTask {
     async fn run(self: Box<Self>, ctx: InitCtx) -> BoxliteResult<()> {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (
-            rootfs_spec,
-            env,
-            runtime,
-            layout,
-            reuse_rootfs,
-            disk_size_gb,
-            entrypoint_override,
-            cmd_override,
-            user_override,
-            working_dir_override,
-        ) = {
+        let (config, runtime, layout, reuse_rootfs) = {
             let ctx = ctx.lock().await;
             let layout = ctx
                 .layout
                 .clone()
                 .ok_or_else(|| BoxliteError::Internal("filesystem task must run first".into()))?;
-            let mut env = ctx.config.options.env.clone();
-            // Inject secret placeholder env vars (e.g., BOXLITE_SECRET_OPENAI=<BOXLITE_SECRET:openai>).
-            // The MITM proxy substitutes real values at the network boundary.
-            env.extend(ctx.config.options.secrets.iter().map(|s| s.env_pair()));
-
             (
-                ctx.config.options.rootfs.clone(),
-                env,
+                ctx.config.clone(),
                 ctx.runtime.clone(),
                 layout,
                 ctx.reuse_rootfs,
-                ctx.config.options.disk_size_gb,
-                ctx.config.options.entrypoint.clone(),
-                ctx.config.options.cmd.clone(),
-                ctx.config.options.user.clone(),
-                ctx.config.options.working_dir.clone(),
             )
         };
+        let options = &config.options;
+        let mut env = options.env.clone();
+        // Inject secret placeholders after user env; the proxy substitutes real values.
+        env.extend(options.secrets.iter().map(|s| s.env_pair()));
 
-        let (container_image_config, disk) = run_container_rootfs(
-            &rootfs_spec,
-            &env,
-            &runtime,
-            &layout,
-            reuse_rootfs,
-            disk_size_gb,
-            entrypoint_override.as_deref(),
-            cmd_override.as_deref(),
-            user_override.as_deref(),
-            working_dir_override.as_deref(),
-        )
-        .await
-        .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
+        let (mut container_image_config, disk) = async {
+            #[cfg(feature = "cloud-runner")]
+            if config.rootfs_backend == crate::litebox::config::RootfsBackend::Overlaybd {
+                let RootfsSpec::Image(reference) = &options.rootfs else {
+                    return Err(BoxliteError::Config(
+                        "OverlayBD requires an image reference".into(),
+                    ));
+                };
+                let manager = runtime
+                    .overlaybd
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BoxliteError::Unsupported("OverlayBD requires the cloud runner".into())
+                    })?
+                    .clone();
+                let disk_path = layout.disk_path();
+                let id = config.id.clone();
+                let reference = reference.clone();
+                let disk_size_gb = options.disk_size_gb;
+                let (mut image_config, disk, lease) = tokio::task::spawn_blocking(move || {
+                    manager.prepare(id.as_str(), &reference, &disk_path, disk_size_gb)
+                })
+                .await
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("OverlayBD preparation task failed: {e}"))
+                })??;
+                image_config.merge_env(env);
+                ctx.lock().await.guard.overlaybd_lease = Some(lease);
+                return Ok((image_config, disk));
+            }
+
+            run_container_rootfs(
+                &options.rootfs,
+                &env,
+                &runtime,
+                &layout,
+                reuse_rootfs,
+                options.disk_size_gb,
+            )
+            .await
+            .inspect_err(|e| log_task_error(&box_id, task_name, e))
+        }
+        .await?;
+        apply_user_overrides(
+            &mut container_image_config,
+            options.entrypoint.as_deref(),
+            options.cmd.as_deref(),
+            options.user.as_deref(),
+            options.working_dir.as_deref(),
+        );
 
         let mut ctx = ctx.lock().await;
         ctx.container_image_config = Some(container_image_config);
@@ -89,7 +252,6 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
 }
 
 /// Pull image and prepare rootfs, then create or reuse COW disk.
-#[allow(clippy::too_many_arguments)]
 async fn run_container_rootfs(
     rootfs_spec: &RootfsSpec,
     env: &[(String, String)],
@@ -97,10 +259,6 @@ async fn run_container_rootfs(
     layout: &BoxFilesystemLayout,
     reuse_rootfs: bool,
     disk_size_gb: Option<u64>,
-    entrypoint_override: Option<&[String]>,
-    cmd_override: Option<&[String]>,
-    user_override: Option<&str>,
-    working_dir_override: Option<&str>,
 ) -> BoxliteResult<(ContainerImageConfig, Disk)> {
     let disk_path = layout.disk_path();
 
@@ -144,13 +302,6 @@ async fn run_container_rootfs(
         if !env.is_empty() {
             container_image_config.merge_env(env.to_vec());
         }
-        apply_user_overrides(
-            &mut container_image_config,
-            entrypoint_override,
-            cmd_override,
-            user_override,
-            working_dir_override,
-        );
 
         return Ok((container_image_config, disk));
     }
@@ -192,13 +343,6 @@ async fn run_container_rootfs(
     if !env.is_empty() {
         container_image_config.merge_env(env.to_vec());
     }
-    apply_user_overrides(
-        &mut container_image_config,
-        entrypoint_override,
-        cmd_override,
-        user_override,
-        working_dir_override,
-    );
 
     let disk = create_cow_disk(&rootfs_result, layout, disk_size_gb)?;
 
