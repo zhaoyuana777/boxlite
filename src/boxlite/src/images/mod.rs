@@ -4,6 +4,10 @@ mod config;
 mod image_disk;
 mod manager;
 mod object;
+// Import-only stage; runtime use requires the device lifecycle integration.
+#[cfg(feature = "cloud-runner")]
+#[allow(dead_code)]
+pub(crate) mod overlaybd;
 mod storage;
 mod store;
 
