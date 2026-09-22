@@ -54,10 +54,12 @@ coverage\:bindings:
 		-p boxlite-python --no-default-features --lib $(NEXTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
-# Include opt-in image code without replacing the default-feature passes.
+# Keep the default-feature pass: it proves the SDK rejects the opt-in.
+# Enable both crates so neither the core backend nor the C ABI is omitted.
 coverage\:cloud-runner:
-	@cargo llvm-cov test --no-report -p boxlite --no-default-features \
-		--features cloud-runner --lib -- --test-threads=1 $(CARGOTEST_FILTER)
+	@cargo llvm-cov test --no-report -p boxlite -p boxlite-c \
+		--features boxlite/cloud-runner,boxlite-c/cloud-runner --lib --no-fail-fast \
+		-- --test-threads=1 $(CARGOTEST_FILTER)
 
 # Render collected profiles, including partial results from a failed test run.
 coverage\:report:

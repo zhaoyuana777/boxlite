@@ -10,6 +10,7 @@ func TestOverlayBDConfig(t *testing.T) {
 	t.Setenv("BOXLITE_API_URL", "http://127.0.0.1:3000")
 	t.Setenv("BOXLITE_RUNNER_TOKEN", "YOUR_API_TOKEN")
 	t.Setenv("RUNNER_DOMAIN", "127.0.0.1")
+	t.Setenv("BOXLITE_OVERLAYBD_IMAGE_DIR", "/srv/overlaybd")
 	for _, value := range []string{"", "false", "true", "not-a-bool"} {
 		t.Run("value="+value, func(t *testing.T) {
 			previous := config
@@ -33,6 +34,9 @@ func TestOverlayBDConfig(t *testing.T) {
 			}
 			if cfg.OverlayBDEnabled != (value == "true") {
 				t.Fatalf("OverlayBDEnabled = %v for %q", cfg.OverlayBDEnabled, value)
+			}
+			if cfg.OverlayBDImageDir != "/srv/overlaybd" {
+				t.Fatalf("OverlayBDImageDir = %q", cfg.OverlayBDImageDir)
 			}
 		})
 	}

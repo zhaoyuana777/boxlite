@@ -95,6 +95,59 @@ pub extern "C" fn boxlite_version() -> *const c_char {
     version()
 }
 
+/// Runner-only constructor. The default native build rejects enabled OverlayBD.
+/// Disabled cloud runtimes preserve the ordinary OCI creation path.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_cloud_runner_runtime_new(
+    home_dir: *const c_char,
+    image_registries: *const BoxliteImageRegistry,
+    image_registries_count: c_int,
+    overlaybd_enabled: c_int,
+    image_dir: *const c_char,
+    out_runtime: *mut *mut CBoxliteRuntime,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    let image_dir = match overlaybd_enabled {
+        0 => None,
+        1 => match unsafe { c_str_to_string(image_dir) } {
+            Ok(path) if !path.is_empty() => Some(std::path::PathBuf::from(path)),
+            _ => {
+                write_error(
+                    out_error,
+                    BoxliteError::InvalidArgument("OverlayBD requires an image directory".into()),
+                );
+                return BoxliteErrorCode::InvalidArgument;
+            }
+        },
+        _ => {
+            write_error(
+                out_error,
+                BoxliteError::InvalidArgument("overlaybd_enabled must be 0 or 1".into()),
+            );
+            return BoxliteErrorCode::InvalidArgument;
+        }
+    };
+    #[cfg(not(feature = "cloud-runner"))]
+    if image_dir.is_some() {
+        let error = BoxliteError::Unsupported(
+            "OverlayBD requires a native library built with cloud-runner".into(),
+        );
+        let code = error_to_code(&error);
+        write_error(out_error, error);
+        return code;
+    }
+    unsafe {
+        runtime_new(
+            home_dir,
+            image_registries,
+            image_registries_count,
+            Some(image_dir),
+            out_runtime,
+            out_error,
+        )
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_runtime_new(
     home_dir: *const c_char,
@@ -107,6 +160,7 @@ pub unsafe extern "C" fn boxlite_runtime_new(
         home_dir,
         image_registries,
         image_registries_count,
+        None,
         out_runtime,
         out_error,
     )
@@ -189,6 +243,7 @@ unsafe fn runtime_new(
     home_dir: *const c_char,
     image_registries: *const BoxliteImageRegistry,
     image_registries_count: c_int,
+    cloud_image_dir: Option<Option<std::path::PathBuf>>,
     out_runtime: *mut *mut RuntimeHandle,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -234,9 +289,14 @@ unsafe fn runtime_new(
         // Unit tests exercise FFI validation and lifecycle without a hypervisor.
         // The exported library keeps host validation for C integration tests.
         #[cfg(test)]
-        let runtime_result = BoxliteRuntime::new_for_test(options);
+        let new_local = BoxliteRuntime::new_for_test;
         #[cfg(not(test))]
-        let runtime_result = BoxliteRuntime::new(options);
+        let new_local = BoxliteRuntime::new;
+        let runtime_result = match cloud_image_dir {
+            #[cfg(feature = "cloud-runner")]
+            Some(image_dir) => BoxliteRuntime::new_cloud_runner(options, image_dir),
+            _ => new_local(options),
+        };
         let runtime = match runtime_result {
             Ok(rt) => rt,
             Err(e) => {
