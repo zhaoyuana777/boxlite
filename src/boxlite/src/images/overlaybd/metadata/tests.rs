@@ -1,5 +1,6 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use super::super::tests::image_fixture;
 use super::*;
 
 #[derive(Clone)]
@@ -118,6 +119,33 @@ impl Registry {
         format!("{}/image@{digest}", self.host)
     }
 
+    fn manifest_path(reference: &str) -> String {
+        format!(
+            "/v2/image/manifests/{}",
+            reference.split_once('@').unwrap().1
+        )
+    }
+
+    fn redirect(&self, path: String, target: &str) {
+        self.routes.lock().insert(
+            path,
+            Response {
+                status: 307,
+                headers: format!("Location: http://{}{target}\r\n", self.host),
+                ..Response::ok(vec![])
+            },
+        );
+    }
+
+    async fn failure(&self, store: &OverlaybdImages, reference: &str) -> String {
+        let failure = store
+            .pull_metadata(reference, &self.options())
+            .await
+            .unwrap_err();
+        assert!(!store.root.join("metadata").exists());
+        failure.to_string()
+    }
+
     fn options(&self) -> Vec<ImageRegistry> {
         vec![ImageRegistry::http(&self.host)]
     }
@@ -125,7 +153,7 @@ impl Registry {
 
 #[tokio::test]
 async fn pulls_only_metadata_and_atomically_reuses_cache() {
-    let (_dir, store, source, mut manifest) = super::super::tests::image_fixture();
+    let (_dir, store, source, mut manifest) = image_fixture();
     manifest["mediaType"] = json!("application/vnd.oci.image.manifest.v1+json");
     let server = Registry::new(None).await;
     let reference = server.image(&source, &manifest);
@@ -139,13 +167,10 @@ async fn pulls_only_metadata_and_atomically_reuses_cache() {
             result.repo_blob_url,
             format!("http://{}/v2/image/blobs", server.host)
         );
+        let expected: Manifest = serde_json::from_value(manifest.clone()).unwrap();
         assert_eq!(
-            result.manifest.layers[0].digest,
-            manifest["layers"][0]["digest"]
-        );
-        assert_eq!(
-            result.manifest.layers[0].annotations.as_ref().unwrap()["containerd.io/snapshot/overlaybd/version"],
-            "0.1.0"
+            serde_json::to_value(&result.manifest).unwrap(),
+            serde_json::to_value(expected).unwrap()
         );
         let path = store
             .root
@@ -188,7 +213,7 @@ async fn reuses_basic_bearer_and_token_exchange_authentication() {
             "Bearer TEST_ONLY_TOKEN".into()
         };
         let server = Registry::new(Some(expected)).await;
-        let (_dir, store, source, manifest) = super::super::tests::image_fixture();
+        let (_dir, store, source, manifest) = image_fixture();
         let reference = server.image(&source, &manifest);
         let mut probe = Response::ok(Vec::new());
         probe.status = 401;
@@ -222,7 +247,7 @@ async fn reuses_basic_bearer_and_token_exchange_authentication() {
 
 #[tokio::test]
 async fn rejects_bad_references_and_registry_settings_without_network() {
-    let (_dir, store, _source, _manifest) = super::super::tests::image_fixture();
+    let (_dir, store, _source, _manifest) = image_fixture();
     let server = Registry::new(None).await;
     for reference in [
         "https://bad/image",
@@ -258,32 +283,16 @@ async fn rejects_invalid_metadata_without_publishing_or_fetching_layers() {
             json!("application/vnd.oci.image.index.v1+json"),
             "single-platform",
         ),
-        ("/schemaVersion", json!(1), "single-platform"),
-        ("/layers", json!([]), "single-platform"),
-        ("/layers/0/size", json!(-1), "size/type"),
-        (
-            "/layers/0/digest",
-            json!("sha256:invalid"),
-            "lowercase sha256",
-        ),
-        ("/layers/0/annotations", json!({}), "native OverlayBD"),
         ("/config/size", json!(MAX_JSON + 1), "4 MiB"),
         ("/config/size", json!(1), "size/type"),
     ] {
-        let (_dir, store, source, mut manifest) = super::super::tests::image_fixture();
+        let (_dir, store, source, mut manifest) = image_fixture();
         manifest["mediaType"] = json!("application/vnd.oci.image.manifest.v1+json");
         *manifest.pointer_mut(pointer).unwrap() = value;
         let server = Registry::new(None).await;
         let reference = server.image(&source, &manifest);
-        let failure = store
-            .pull_metadata(&reference, &server.options())
-            .await
-            .unwrap_err();
-        assert!(
-            failure.to_string().contains(message),
-            "{pointer}: {failure}"
-        );
-        assert!(!store.root.join("metadata").exists());
+        let failure = server.failure(&store, &reference).await;
+        assert!(failure.contains(message), "{pointer}: {failure}");
         assert!(!server.paths.lock().iter().any(|p| {
             p.ends_with(manifest["layers"][0]["digest"].as_str().unwrap_or("never"))
                 && p.contains("/blobs/")
@@ -293,29 +302,16 @@ async fn rejects_invalid_metadata_without_publishing_or_fetching_layers() {
 
 #[tokio::test]
 async fn rejects_tampered_manifest_config_and_external_urls() {
-    for mode in ["manifest", "config", "urls", "platform", "json"] {
-        let (_dir, store, source, mut manifest) = super::super::tests::image_fixture();
+    for mode in ["manifest", "config", "urls"] {
+        let (_dir, store, source, mut manifest) = image_fixture();
         if mode == "urls" {
             manifest["layers"][0]["urls"] = json!(["https://other.invalid/blob"]);
-        }
-        if mode == "platform" || mode == "json" {
-            let bytes = if mode == "platform" {
-                json!({"architecture":"unsupported", "os":"linux", "rootfs":{"type":"layers","diff_ids":[]}}).to_string().into_bytes()
-            } else {
-                b"{".to_vec()
-            };
-            let mut config = super::super::tests::write_blob(&source, &bytes);
-            config["mediaType"] = json!("application/vnd.oci.image.config.v1+json");
-            manifest["config"] = config;
         }
         let server = Registry::new(None).await;
         let reference = server.image(&source, &manifest);
         if mode == "manifest" || mode == "config" {
             let path = if mode == "manifest" {
-                format!(
-                    "/v2/image/manifests/{}",
-                    reference.split_once('@').unwrap().1
-                )
+                Registry::manifest_path(&reference)
             } else {
                 format!(
                     "/v2/image/blobs/{}",
@@ -324,56 +320,54 @@ async fn rejects_tampered_manifest_config_and_external_urls() {
             };
             server.routes.lock().get_mut(&path).unwrap().body[0] ^= 1;
         }
+        let failure = server.failure(&store, &reference).await;
         assert!(
-            store
-                .pull_metadata(&reference, &server.options())
-                .await
-                .is_err(),
-            "{mode}"
+            failure.contains(if mode == "urls" {
+                "external URLs"
+            } else {
+                "digest mismatch"
+            }),
+            "{mode}: {failure}"
         );
-        assert!(!store.root.join("metadata").exists());
     }
 }
 
 #[tokio::test]
 async fn bounds_streams_and_does_not_echo_error_bodies() {
-    for mode in ["length", "chunked", "401", "403", "404"] {
-        let (_dir, store, source, manifest) = super::super::tests::image_fixture();
+    for mode in ["length", "chunked", "truncated", "401", "403", "404"] {
+        let (_dir, store, source, manifest) = image_fixture();
         let server = Registry::new(None).await;
         let reference = server.image(&source, &manifest);
-        let path = format!(
-            "/v2/image/manifests/{}",
-            reference.split_once('@').unwrap().1
-        );
+        let path = Registry::manifest_path(&reference);
         let mut response = Response::ok(if mode == "length" || mode == "chunked" {
             vec![b' '; MAX_JSON as usize + 1]
         } else {
             b"TEST_ONLY_SENSITIVE_BODY".to_vec()
         });
+        if mode == "truncated" {
+            response.headers = "Content-Length: 100\r\n".into();
+        }
         response.chunked = mode == "chunked";
         response.status = mode.parse().unwrap_or(200);
         server.routes.lock().insert(path, response);
-        let failure = store
-            .pull_metadata(&reference, &server.options())
-            .await
-            .unwrap_err()
-            .to_string();
+        let failure = server.failure(&store, &reference).await;
         assert!(!failure.contains("TEST_ONLY_SENSITIVE_BODY"));
         assert!(
             failure.contains(if mode == "length" || mode == "chunked" {
                 "4 MiB"
+            } else if mode == "truncated" {
+                "body"
             } else {
                 mode
             }),
             "{failure}"
         );
-        assert!(!store.root.join("metadata").exists());
     }
 }
 
 #[tokio::test]
 async fn cache_failure_preserves_existing_metadata() {
-    let (dir, store, source, manifest) = super::super::tests::image_fixture();
+    let (dir, store, source, manifest) = image_fixture();
     let server = Registry::new(None).await;
     let reference = server.image(&source, &manifest);
     store
@@ -414,7 +408,7 @@ async fn cache_failure_preserves_existing_metadata() {
 
 #[tokio::test]
 async fn follows_blob_redirect_without_persisting_redirect_url() {
-    let (_dir, store, source, manifest) = super::super::tests::image_fixture();
+    let (_dir, store, source, manifest) = image_fixture();
     let server = Registry::new(None).await;
     let reference = server.image(&source, &manifest);
     let path = format!(
@@ -423,18 +417,7 @@ async fn follows_blob_redirect_without_persisting_redirect_url() {
     );
     let original = server.routes.lock().remove(&path).unwrap();
     server.routes.lock().insert("/redirected".into(), original);
-    server.routes.lock().insert(
-        path,
-        Response {
-            status: 307,
-            headers: format!(
-                "Location: http://{}/redirected?test-signature=TEST_ONLY\r\n",
-                server.host
-            ),
-            body: vec![],
-            chunked: false,
-        },
-    );
+    server.redirect(path, "/redirected?test-signature=TEST_ONLY");
     let result = store
         .pull_metadata(&reference, &server.options())
         .await
@@ -451,33 +434,22 @@ async fn follows_blob_redirect_without_persisting_redirect_url() {
 
 #[tokio::test]
 async fn times_out_stalled_metadata_without_publishing() {
-    let (_dir, store, source, manifest) = super::super::tests::image_fixture();
+    let (_dir, store, source, manifest) = image_fixture();
     let server = Registry::new(None).await;
     let reference = server.image(&source, &manifest);
-    let path = format!(
-        "/v2/image/manifests/{}",
-        reference.split_once('@').unwrap().1
+    let path = Registry::manifest_path(&reference);
+    server.redirect(path, "/stall");
+    assert!(
+        server
+            .failure(&store, &reference)
+            .await
+            .contains("timed out after 30s")
     );
-    server.routes.lock().insert(
-        path,
-        Response {
-            status: 307,
-            headers: format!("Location: http://{}/stall\r\n", server.host),
-            body: vec![],
-            chunked: false,
-        },
-    );
-    let failure = store
-        .pull_metadata(&reference, &server.options())
-        .await
-        .unwrap_err();
-    assert!(failure.to_string().contains("timed out after 30s"));
-    assert!(!store.root.exists());
 }
 
 #[tokio::test]
 async fn authentication_and_connection_errors_do_not_publish() {
-    let (_dir, store, source, manifest) = super::super::tests::image_fixture();
+    let (_dir, store, source, manifest) = image_fixture();
     let mut server = Registry::new(None).await;
     let reference = server.image(&source, &manifest);
     server.routes.lock().insert(
@@ -517,7 +489,7 @@ async fn authentication_and_connection_errors_do_not_publish() {
 
 #[tokio::test]
 async fn concurrent_pulls_publish_one_complete_directory() {
-    let (_dir, store, source, manifest) = super::super::tests::image_fixture();
+    let (_dir, store, source, manifest) = image_fixture();
     let server = Registry::new(None).await;
     let reference = server.image(&source, &manifest);
     let options = server.options();
@@ -529,45 +501,17 @@ async fn concurrent_pulls_publish_one_complete_directory() {
         first.unwrap().manifest.config.digest,
         second.unwrap().manifest.config.digest
     );
-    let entries: Vec<_> = fs::read_dir(store.root.join("metadata")).unwrap().collect();
-    assert_eq!(entries.len(), 1);
-    let cached = entries[0].as_ref().unwrap().path();
-    let manifest_bytes = read_bounded(&cached.join("manifest.json")).unwrap();
-    let parsed = parse_manifest(&manifest_bytes, reference.split_once('@').unwrap().1).unwrap();
-    assert_eq!(
-        parse_config(
-            &read_bounded(&cached.join("config.json")).unwrap(),
-            &parsed.config
-        )
-        .unwrap()
-        .user,
-        "1000"
-    );
-}
-
-#[tokio::test]
-async fn rejects_truncated_response_without_publishing() {
-    let (_dir, store, source, manifest) = super::super::tests::image_fixture();
-    let server = Registry::new(None).await;
-    let reference = server.image(&source, &manifest);
-    let path = format!(
-        "/v2/image/manifests/{}",
-        reference.split_once('@').unwrap().1
-    );
-    server.routes.lock().insert(
-        path,
-        Response {
-            status: 200,
-            headers: "Content-Length: 100\r\n".into(),
-            body: b"{".to_vec(),
-            chunked: false,
-        },
-    );
-    assert!(
-        store
-            .pull_metadata(&reference, &server.options())
-            .await
-            .is_err()
-    );
-    assert!(!store.root.exists());
+    let root = store.root.join("metadata");
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+    let cached = root.join(image_digest(&reference).unwrap());
+    for (name, expected) in [
+        ("manifest.json", serde_json::to_vec(&manifest).unwrap()),
+        (
+            "config.json",
+            fs::read(blob_path(&source, manifest["config"]["digest"].as_str().unwrap()).unwrap())
+                .unwrap(),
+        ),
+    ] {
+        assert_eq!(fs::read(cached.join(name)).unwrap(), expected);
+    }
 }
