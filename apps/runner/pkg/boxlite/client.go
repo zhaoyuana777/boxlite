@@ -46,6 +46,7 @@ type ClientConfig struct {
 	Logger                       *slog.Logger
 	HomeDir                      string
 	OverlayBDEnabled             bool
+	OverlayBDSource              string
 	OverlayBDImageDir            string
 	InsecureRegistries           []string
 	GhcrUsername                 string
@@ -157,8 +158,19 @@ func buildImageRegistries(insecureRegistries []string, ghcrUsername, ghcrToken s
 
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
-	if config.OverlayBDEnabled && config.OverlayBDImageDir == "" {
-		return nil, fmt.Errorf("BOXLITE_OVERLAYBD_IMAGE_DIR is required when OverlayBD is enabled")
+	if config.OverlayBDEnabled {
+		switch config.OverlayBDSource {
+		case "", "local": // Preserve existing callers that only supply imageDir.
+			if config.OverlayBDImageDir == "" {
+				return nil, fmt.Errorf("BOXLITE_OVERLAYBD_IMAGE_DIR is required for local OverlayBD")
+			}
+		case "registry":
+			if config.OverlayBDImageDir != "" {
+				return nil, fmt.Errorf("BOXLITE_OVERLAYBD_IMAGE_DIR must be empty for registry OverlayBD")
+			}
+		default:
+			return nil, fmt.Errorf("BOXLITE_OVERLAYBD_SOURCE must be local or registry")
+		}
 	}
 
 	var opts []boxlite.RuntimeOption
@@ -167,6 +179,14 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 	insecureRegistries := normalizeRegistryHosts(config.InsecureRegistries)
 	registries := buildImageRegistries(insecureRegistries, config.GhcrUsername, config.GhcrToken)
+	if config.OverlayBDEnabled && config.OverlayBDSource == "registry" {
+		for i := range registries {
+			// HTTP is explicit; remote OverlayBD must never request a TLS bypass.
+			if registries[i].Transport == boxlite.RegistryTransportHTTP {
+				registries[i].SkipVerify = false
+			}
+		}
+	}
 	// docker.io auth (local dev): boxlite-core pulls box base images (e.g. the
 	// debian base disk + public user images) from docker.io; without auth those
 	// hit the anonymous Docker Hub rate limit. Mirror the ghcr.io auth entry.
@@ -184,7 +204,13 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		opts = append(opts, boxlite.WithImageRegistries(registries...))
 	}
 
-	rt, err := boxlite.NewCloudRunner(config.OverlayBDEnabled, config.OverlayBDImageDir, opts...)
+	var rt *boxlite.Runtime
+	var err error
+	if config.OverlayBDEnabled && config.OverlayBDSource == "registry" {
+		rt, err = boxlite.NewCloudRunnerRegistry(opts...)
+	} else {
+		rt, err = boxlite.NewCloudRunner(config.OverlayBDEnabled, config.OverlayBDImageDir, opts...)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create boxlite runtime: %w", err)
 	}

@@ -1149,6 +1149,14 @@ enum BoxliteErrorCode boxlite_cloud_runner_runtime_new(const char *home_dir,
                                                        CBoxliteRuntime **out_runtime,
                                                        CBoxliteError *out_error);
 
+// Runner-only remote OverlayBD constructor. Requires Linux and cloud-runner.
+// Registry settings authorize metadata; provision daemon layer credentials separately.
+enum BoxliteErrorCode boxlite_cloud_runner_registry_runtime_new(const char *home_dir,
+                                                                const struct BoxliteImageRegistry *image_registries,
+                                                                int image_registries_count,
+                                                                CBoxliteRuntime **out_runtime,
+                                                                CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
                                           const struct BoxliteImageRegistry *image_registries,
                                           int image_registries_count,

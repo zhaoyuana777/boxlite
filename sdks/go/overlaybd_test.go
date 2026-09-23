@@ -49,17 +49,49 @@ func TestOverlayBDCloudConstructorRejectsMissingDirectory(t *testing.T) {
 	}
 }
 
+func TestOverlayBDRegistryNativeGate(t *testing.T) {
+	rt, err := NewCloudRunnerRegistry(WithHomeDir(t.TempDir()), WithImageRegistry(ImageRegistry{
+		Host: "registry.example.com", SkipVerify: true,
+	}))
+	if rt != nil {
+		rt.Close()
+		t.Fatal("remote TLS verification must not be bypassed")
+	}
+	var nativeError *Error
+	if !errors.As(err, &nativeError) || (nativeError.Code != ErrStorage && nativeError.Code != ErrUnsupported) {
+		t.Fatalf("expected native remote validation or feature gate, got %v", err)
+	}
+}
+
 // Requires a real converted Linux image, UBLK daemon and BoxLite VM runtime.
 // make test:integration:overlaybd validates prerequisites before invoking this.
-func TestOverlayBDLocalSmoke(t *testing.T) {
+func TestOverlayBDSmoke(t *testing.T) {
 	image, directory := os.Getenv("OVERLAYBD_TEST_IMAGE"), os.Getenv("BOXLITE_OVERLAYBD_IMAGE_DIR")
-	if runtime.GOOS != "linux" || image == "" || directory == "" {
+	if runtime.GOOS != "linux" || image == "" {
 		t.Skip("real Linux OverlayBD fixture is not configured")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	home := t.TempDir()
-	rt, err := NewCloudRunner(true, directory, WithHomeDir(home))
+	var rt *Runtime
+	var err error
+	switch os.Getenv("BOXLITE_OVERLAYBD_SOURCE") {
+	case "", "local":
+		rt, err = NewCloudRunner(true, directory, WithHomeDir(home))
+	case "registry":
+		if directory != "" {
+			t.Fatal("registry acceptance requires an empty image directory")
+		}
+		registry := ImageRegistry{Host: strings.SplitN(image, "/", 2)[0], Auth: ImageRegistryAuth{
+			Username: os.Getenv("OVERLAYBD_TEST_REGISTRY_USERNAME"), Password: os.Getenv("OVERLAYBD_TEST_REGISTRY_PASSWORD"),
+		}}
+		if os.Getenv("OVERLAYBD_TEST_HTTP") == "true" {
+			registry.Transport = RegistryTransportHTTP
+		}
+		rt, err = NewCloudRunnerRegistry(WithHomeDir(home), WithImageRegistry(registry))
+	default:
+		t.Fatal("BOXLITE_OVERLAYBD_SOURCE must be local or registry")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

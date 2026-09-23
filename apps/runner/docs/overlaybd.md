@@ -1,8 +1,8 @@
-# Local OverlayBD acceptance (PR3)
+# Cloud runner OverlayBD
 
 This opt-in connects a verified local converted image to a shared read-only
-UBLK device, with an independent writable qcow2 for each box. It does not fetch
-OverlayBD layers from registries or convert images during box creation.
+UBLK device, with an independent writable qcow2 for each box. Local mode imports complete blobs; registry mode reads layers on demand through
+the external daemon. Neither mode converts images during box creation.
 Ordinary SDK `NewRuntime`, CLI and `boxlite serve` keep the OCI pipeline even
 when the environment variable is set. Only the explicit cloud runner constructor
 can enable this backend; compile its native library with `CLOUD_RUNNER=1`.
@@ -53,8 +53,9 @@ Run the cloud runner/test with access to the root-only daemon socket
 The daemon and runner must see the same absolute runtime-home paths and device
 namespace. A container deployment must provide these explicitly; this PR does
 not modify deployment privileges or install/start the daemon automatically.
-Set `BOXLITE_OVERLAYBD_ENABLED=true` and `BOXLITE_OVERLAYBD_IMAGE_DIR` for the
-runner. Production native packaging also accepts `make dist:go CLOUD_RUNNER=1`.
+For local mode, set `BOXLITE_OVERLAYBD_ENABLED=true` and
+`BOXLITE_OVERLAYBD_IMAGE_DIR` for the runner. `BOXLITE_OVERLAYBD_SOURCE` defaults
+to `local`. Production native packaging also accepts `make dist:go CLOUD_RUNNER=1`.
 
 ## Acceptance
 
@@ -121,8 +122,9 @@ Linux builds with `cloud-runner` can explicitly call
 authorizes manifest/config requests; provision daemon layer credentials separately.
 HTTPS verification is required (`skip_verify` is rejected); explicitly configured
 HTTP registries are supported. The existing `new_cloud_runner(options, image_dir)`
-keeps its local-import/disabled semantics. Go/C/Runner remote configuration is not
-part of this entry point.
+keeps its local-import/disabled semantics. Go exposes `NewCloudRunnerRegistry`,
+backed by the additive C ABI `boxlite_cloud_runner_registry_runtime_new`.
+Existing C and Go constructors keep their signatures and behavior.
 
 Before saving a Box, the runtime binds its manifest digest to one origin in the
 SQLite `overlaybd_source` table. The first successful binding wins; local/remote
@@ -154,3 +156,50 @@ requires draining its Boxes first, since live devices are not transparently repl
 limit covers the daemon cache, not local blobs, metadata or per-Box qcow2 files.
 Deployment must separately budget those directories and keep the daemon alive.
 Do not infer complete offline availability from a warm cache.
+
+## Runner registry mode (PR4-C)
+
+Set `BOXLITE_OVERLAYBD_ENABLED=true`, `BOXLITE_OVERLAYBD_SOURCE=registry`, and
+leave `BOXLITE_OVERLAYBD_IMAGE_DIR` unset. With OverlayBD enabled, unknown sources,
+missing local directories and registry mode combined with a local directory fail
+at Runner startup. With the opt-in disabled, source/directory settings are ignored
+and new Boxes use OCI. Ordinary SDK/CLI entry points always use OCI.
+
+| Entry / build | New Box backend |
+| --- | --- |
+| Ordinary SDK/CLI, or disabled Runner | OCI |
+| Enabled Runner, source unset or `local`, directory supplied | Local OverlayBD |
+| Enabled Runner, source `registry`, no directory | Remote OverlayBD |
+| Enabled OverlayBD without Linux or `cloud-runner` native build | Error |
+
+Runner reads these options when constructing its single runtime. Changing the
+process environment does not update an existing runtime. After a restart, new
+Boxes use the configured default; existing Boxes retain their persisted backend
+and origin. Keep the daemon running for existing OverlayBD Boxes. OCI Boxes
+continue using OCI even after enabling OverlayBD.
+
+Runner's existing GHCR/Docker Hub credentials authorize metadata requests;
+`INSECURE_REGISTRIES` selects explicit HTTP. Configure matching layer access in
+the daemon's native credential provider separately; Runner does not copy tokens
+into daemon configuration. Use the pinned daemon and OCF profile above. Provision
+and test credentials/cache before enabling registry mode; there is no OCI fallback
+on metadata, daemon or layer errors.
+
+For real remote acceptance, push an externally converted, single-platform image
+and select its manifest digest, provision daemon credentials, then run:
+
+```sh
+export BOXLITE_OVERLAYBD_SOURCE=registry
+unset BOXLITE_OVERLAYBD_IMAGE_DIR
+export OVERLAYBD_TEST_IMAGE='registry.example.com/team/image@sha256:CONVERTED_MANIFEST_DIGEST'
+# Provide OVERLAYBD_TEST_REGISTRY_USERNAME / PASSWORD through a secure environment
+# for private metadata access. Only for an explicit HTTP test registry:
+# export OVERLAYBD_TEST_HTTP=true
+make test:integration:overlaybd
+```
+
+This reuses the local acceptance lifecycle checks through the remote Go/C entry.
+For a cold cache, record registry Range bytes and verify that startup transfers
+less than all layers with daemon background download disabled. A successful warm
+start alone does not prove lazy fetching. Image conversion and uploaded image
+assets remain external to this repository.

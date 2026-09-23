@@ -17,6 +17,14 @@ func TestOverlayBDConfig(t *testing.T) {
 			config = nil
 			t.Cleanup(func() { config = previous })
 			t.Setenv("BOXLITE_OVERLAYBD_ENABLED", value)
+			source := "local"
+			t.Setenv("BOXLITE_OVERLAYBD_SOURCE", "")
+			if value == "true" {
+				source = "registry"
+				t.Setenv("BOXLITE_OVERLAYBD_SOURCE", source)
+			} else if err := os.Unsetenv("BOXLITE_OVERLAYBD_SOURCE"); err != nil {
+				t.Fatal(err)
+			}
 			if value == "" {
 				if err := os.Unsetenv("BOXLITE_OVERLAYBD_ENABLED"); err != nil {
 					t.Fatal(err)
@@ -34,6 +42,9 @@ func TestOverlayBDConfig(t *testing.T) {
 			}
 			if cfg.OverlayBDEnabled != (value == "true") {
 				t.Fatalf("OverlayBDEnabled = %v for %q", cfg.OverlayBDEnabled, value)
+			}
+			if cfg.OverlayBDSource != source {
+				t.Fatalf("OverlayBDSource = %q, want %q", cfg.OverlayBDSource, source)
 			}
 			if cfg.OverlayBDImageDir != "/srv/overlaybd" {
 				t.Fatalf("OverlayBDImageDir = %q", cfg.OverlayBDImageDir)

@@ -110,6 +110,7 @@ func run() int {
 		Logger:                       logger,
 		HomeDir:                      cfg.BoxliteHomeDir,
 		OverlayBDEnabled:             cfg.OverlayBDEnabled,
+		OverlayBDSource:              cfg.OverlayBDSource,
 		OverlayBDImageDir:            cfg.OverlayBDImageDir,
 		InsecureRegistries:           insecureRegs,
 		GhcrUsername:                 cfg.GhcrUsername,

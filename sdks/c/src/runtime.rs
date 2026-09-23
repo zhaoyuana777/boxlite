@@ -141,7 +141,29 @@ pub unsafe extern "C" fn boxlite_cloud_runner_runtime_new(
             home_dir,
             image_registries,
             image_registries_count,
-            Some(image_dir),
+            Some(CloudImageSource::Local(image_dir)),
+            out_runtime,
+            out_error,
+        )
+    }
+}
+
+/// Runner-only remote OverlayBD constructor. Requires Linux and cloud-runner.
+/// Registry settings authorize metadata; provision daemon layer credentials separately.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_cloud_runner_registry_runtime_new(
+    home_dir: *const c_char,
+    image_registries: *const BoxliteImageRegistry,
+    image_registries_count: c_int,
+    out_runtime: *mut *mut CBoxliteRuntime,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        runtime_new(
+            home_dir,
+            image_registries,
+            image_registries_count,
+            Some(CloudImageSource::Registry),
             out_runtime,
             out_error,
         )
@@ -239,11 +261,16 @@ pub unsafe extern "C" fn boxlite_runtime_drain(
     drain(runtime, timeout_ms, out_error)
 }
 
+enum CloudImageSource {
+    Local(Option<std::path::PathBuf>),
+    Registry,
+}
+
 unsafe fn runtime_new(
     home_dir: *const c_char,
     image_registries: *const BoxliteImageRegistry,
     image_registries_count: c_int,
-    cloud_image_dir: Option<Option<std::path::PathBuf>>,
+    cloud_source: Option<CloudImageSource>,
     out_runtime: *mut *mut RuntimeHandle,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -292,10 +319,31 @@ unsafe fn runtime_new(
         let new_local = BoxliteRuntime::new_for_test;
         #[cfg(not(test))]
         let new_local = BoxliteRuntime::new;
-        let runtime_result = match cloud_image_dir {
-            #[cfg(feature = "cloud-runner")]
-            Some(image_dir) => BoxliteRuntime::new_cloud_runner(options, image_dir),
-            _ => new_local(options),
+        let runtime_result = match cloud_source {
+            Some(CloudImageSource::Registry) => {
+                #[cfg(feature = "cloud-runner")]
+                {
+                    BoxliteRuntime::new_cloud_runner_registry(options)
+                }
+                #[cfg(not(feature = "cloud-runner"))]
+                {
+                    Err(BoxliteError::Unsupported(
+                        "OverlayBD requires a native library built with cloud-runner".into(),
+                    ))
+                }
+            }
+            Some(CloudImageSource::Local(image_dir)) => {
+                #[cfg(feature = "cloud-runner")]
+                {
+                    BoxliteRuntime::new_cloud_runner(options, image_dir)
+                }
+                #[cfg(not(feature = "cloud-runner"))]
+                {
+                    let _ = image_dir;
+                    new_local(options)
+                }
+            }
+            None => new_local(options),
         };
         let runtime = match runtime_result {
             Ok(rt) => rt,

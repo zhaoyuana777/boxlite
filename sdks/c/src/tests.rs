@@ -78,6 +78,49 @@ fn cloud_runner_enforces_native_feature_and_platform() {
     let _ = std::fs::remove_dir_all(home);
 }
 
+#[test]
+fn cloud_runner_registry_rejects_unsupported_or_invalid_configuration() {
+    for skip_verify in [0, 1] {
+        let home = PathBuf::from(unique_test_home("cloud-registry").file_name().unwrap());
+        let home_c = CString::new(home.to_str().unwrap()).unwrap();
+        let registry = BoxliteImageRegistry {
+            host: c"registry.example.com".as_ptr(),
+            transport: BoxliteRegistryTransport::BoxliteRegistryTransportHttps,
+            skip_verify,
+            search: 0,
+            username: ptr::null(),
+            password: ptr::null(),
+            bearer_token: ptr::null(),
+        };
+        let mut runtime = ptr::null_mut();
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_cloud_runner_registry_runtime_new(
+                home_c.as_ptr(),
+                &registry,
+                1,
+                &mut runtime,
+                &mut error,
+            )
+        };
+        let expected =
+            if cfg!(feature = "cloud-runner") && (skip_verify == 1 || cfg!(target_os = "linux")) {
+                BoxliteErrorCode::Storage
+            } else {
+                BoxliteErrorCode::Unsupported
+            };
+        assert_eq!(code, expected);
+        assert_eq!(error.code, code);
+        assert!(runtime.is_null());
+        let message = unsafe { CStr::from_ptr(error.message) }.to_string_lossy();
+        if cfg!(feature = "cloud-runner") && skip_verify == 1 {
+            assert!(message.contains("verified TLS"), "{message}");
+        }
+        unsafe { boxlite_error_free(&mut error) };
+        let _ = std::fs::remove_dir_all(home);
+    }
+}
+
 #[cfg(not(feature = "cloud-runner"))]
 #[test]
 fn cloud_runner_disabled_uses_local_runtime() {
