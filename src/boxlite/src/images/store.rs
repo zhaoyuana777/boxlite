@@ -1041,7 +1041,10 @@ impl ImageStore {
     }
 }
 
-fn client_config_for_registry(host: &str, image_registries: &[ImageRegistry]) -> ClientConfig {
+pub(super) fn client_config_for_registry(
+    host: &str,
+    image_registries: &[ImageRegistry],
+) -> ClientConfig {
     let registry = image_registries
         .iter()
         .find(|registry| registry.host == host);
@@ -1058,7 +1061,7 @@ fn client_config_for_registry(host: &str, image_registries: &[ImageRegistry]) ->
     }
 }
 
-fn registry_auth_for(host: &str, image_registries: &[ImageRegistry]) -> OciRegistryAuth {
+pub(super) fn registry_auth_for(host: &str, image_registries: &[ImageRegistry]) -> OciRegistryAuth {
     let auth = image_registries
         .iter()
         .find(|registry| registry.host == host)
@@ -1083,7 +1086,7 @@ fn search_registries(image_registries: &[ImageRegistry]) -> Vec<String> {
     registries
 }
 
-fn validate_image_registries(image_registries: &[ImageRegistry]) -> BoxliteResult<()> {
+pub(super) fn validate_image_registries(image_registries: &[ImageRegistry]) -> BoxliteResult<()> {
     for registry in image_registries {
         let host = registry.host.trim();
         if host.is_empty() {

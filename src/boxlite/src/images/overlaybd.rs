@@ -1,4 +1,7 @@
-//! Verified local OverlayBD blobs, isolated from the ordinary OCI image cache.
+//! Verified OverlayBD images, isolated from the ordinary OCI image cache.
+
+mod metadata;
+pub use metadata::OverlaybdMetadata;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -8,6 +11,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use boxlite_shared::{BoxliteError, BoxliteResult};
+use oci_client::manifest::{OciDescriptor as Blob, OciImageManifest as Manifest};
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -58,36 +62,78 @@ fn read_bounded(path: &Path) -> BoxliteResult<Vec<u8>> {
     Ok(bytes)
 }
 
-fn read_json(path: &Path, digest: &str) -> BoxliteResult<Vec<u8>> {
-    let bytes = read_bounded(path)?;
-    if hex::encode(Sha256::digest(&bytes)) != digest_hex(digest)? {
+fn verify_digest(bytes: &[u8], digest: &str) -> BoxliteResult<()> {
+    if hex::encode(Sha256::digest(bytes)) != digest_hex(digest)? {
         return Err(error(format!("digest mismatch for {digest}")));
     }
-    Ok(bytes)
+    Ok(())
 }
 
-#[derive(Deserialize)]
-struct Blob {
-    digest: String,
-    size: u64,
-    #[serde(default)]
-    annotations: BTreeMap<String, String>,
+fn parse_manifest(bytes: &[u8], digest: &str) -> BoxliteResult<Manifest> {
+    verify_digest(bytes, digest)?;
+    let manifest: Manifest = serde_json::from_slice(bytes).map_err(error)?;
+    if manifest.schema_version != 2
+        || !(1..=128).contains(&manifest.layers.len())
+        || manifest.media_type.as_deref().is_some_and(|kind| {
+            !matches!(
+                kind,
+                "application/vnd.oci.image.manifest.v1+json"
+                    | "application/vnd.docker.distribution.manifest.v2+json"
+            )
+        })
+    {
+        return Err(error(
+            "expected a single-platform manifest with 1..128 layers",
+        ));
+    }
+    for blob in std::iter::once(&manifest.config).chain(&manifest.layers) {
+        digest_hex(&blob.digest)?;
+        if blob.size <= 0 || blob.urls.as_ref().is_some_and(|urls| !urls.is_empty()) {
+            return Err(error("invalid blob size/type or unsupported external URLs"));
+        }
+    }
+    for layer in &manifest.layers {
+        let annotation = |key: &str| layer.annotations.as_ref().and_then(|a| a.get(key));
+        if annotation("containerd.io/snapshot/overlaybd/version").map(String::as_str)
+            != Some("0.1.0")
+        {
+            return Err(error("only native OverlayBD 0.1.0 layers are supported"));
+        }
+        if annotation("containerd.io/snapshot/overlaybd/blob-digest") != Some(&layer.digest) {
+            return Err(error(
+                "layer blob digest annotation must match its descriptor",
+            ));
+        }
+    }
+    Ok(manifest)
 }
 
-#[derive(Deserialize)]
-struct Manifest {
-    #[serde(rename = "schemaVersion")]
-    schema_version: u32,
-    config: Blob,
-    layers: Vec<Blob>,
+fn parse_config(bytes: &[u8], descriptor: &Blob) -> BoxliteResult<ContainerImageConfig> {
+    if bytes.len() as i64 != descriptor.size {
+        return Err(error("invalid config blob size/type"));
+    }
+    verify_digest(bytes, &descriptor.digest)?;
+    let config: oci_spec::image::ImageConfiguration =
+        serde_json::from_slice(bytes).map_err(error)?;
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    if config.os().to_string() != "linux" || config.architecture().to_string() != arch {
+        return Err(error(format!("image must target linux/{arch}")));
+    }
+    ContainerImageConfig::from_oci_config(&config)
 }
 
-pub(crate) struct OverlaybdImages {
+/// OverlayBD image preparation; never publishes ordinary OCI cache entries.
+#[derive(Debug)]
+pub struct OverlaybdImages {
     root: PathBuf,
 }
 
 impl OverlaybdImages {
-    pub(crate) fn new(home: &Path) -> Self {
+    pub fn new(home: &Path) -> Self {
         Self {
             root: home.join("overlaybd"),
         }
@@ -115,47 +161,10 @@ impl OverlaybdImages {
             ));
         }
         let digest = format!("sha256:{}", image_digest(reference)?);
-        let bytes = read_json(&blob_path(source, &digest)?, &digest)?;
-        let manifest: Manifest = serde_json::from_slice(&bytes).map_err(error)?;
-        if manifest.schema_version != 2 || !(1..=128).contains(&manifest.layers.len()) {
-            return Err(error(
-                "expected a single-platform manifest with 1..128 layers",
-            ));
-        }
-        for layer in &manifest.layers {
-            if layer
-                .annotations
-                .get("containerd.io/snapshot/overlaybd/version")
-                .map(String::as_str)
-                != Some("0.1.0")
-            {
-                return Err(error("only native OverlayBD 0.1.0 layers are supported"));
-            }
-            if layer
-                .annotations
-                .get("containerd.io/snapshot/overlaybd/blob-digest")
-                != Some(&layer.digest)
-            {
-                return Err(error(
-                    "layer blob digest annotation must match its descriptor",
-                ));
-            }
-        }
-        let config_bytes = read_json(
-            &blob_path(source, &manifest.config.digest)?,
-            &manifest.config.digest,
-        )?;
-        let config: oci_spec::image::ImageConfiguration =
-            serde_json::from_slice(&config_bytes).map_err(error)?;
-        let arch = match std::env::consts::ARCH {
-            "x86_64" => "amd64",
-            "aarch64" => "arm64",
-            other => other,
-        };
-        if config.os().to_string() != "linux" || config.architecture().to_string() != arch {
-            return Err(error(format!("image must target linux/{arch}")));
-        }
-        let config = ContainerImageConfig::from_oci_config(&config)?;
+        let bytes = read_bounded(&blob_path(source, &digest)?)?;
+        let manifest = parse_manifest(&bytes, &digest)?;
+        let config_bytes = read_bounded(&blob_path(source, &manifest.config.digest)?)?;
+        let config = parse_config(&config_bytes, &manifest.config)?;
         for blob in std::iter::once(&manifest.config).chain(&manifest.layers) {
             self.copy_blob(source, blob)?;
         }
@@ -164,8 +173,8 @@ impl OverlaybdImages {
             source,
             &Blob {
                 digest,
-                size: bytes.len() as u64,
-                annotations: BTreeMap::new(),
+                size: bytes.len() as i64,
+                ..Blob::default()
             },
         )?;
         let layers = manifest
@@ -187,7 +196,7 @@ impl OverlaybdImages {
         let mut input =
             File::open(&src).map_err(|e| error(format!("open {}: {e}", src.display())))?;
         let metadata = input.metadata().map_err(error)?;
-        if !metadata.is_file() || metadata.len() != blob.size {
+        if !metadata.is_file() || metadata.len() != blob.size as u64 {
             return Err(error(format!("invalid blob size/type: {}", src.display())));
         }
         fs::create_dir_all(dst.parent().unwrap()).map_err(error)?;
@@ -199,7 +208,7 @@ impl OverlaybdImages {
         let mut hash = Sha256::new();
         let mut buffer = [0u8; 65536];
         // Bound reads even if the source is concurrently growing.
-        let mut input = (&mut input).take(blob.size.saturating_add(1));
+        let mut input = (&mut input).take((blob.size as u64).saturating_add(1));
         loop {
             let n = input.read(&mut buffer).map_err(error)?;
             if n == 0 {
@@ -591,12 +600,12 @@ pub(crate) mod tests {
     use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixListener;
 
-    fn write_blob(source: &Path, bytes: &[u8]) -> Value {
+    pub(super) fn write_blob(source: &Path, bytes: &[u8]) -> Value {
         let digest = format!("sha256:{}", hex::encode(Sha256::digest(bytes)));
         let path = blob_path(source, &digest).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, bytes).unwrap();
-        json!({"digest": digest, "size": bytes.len()})
+        json!({"mediaType": "application/vnd.oci.image.config.v1+json", "digest": digest, "size": bytes.len()})
     }
 
     fn pin(source: &Path, manifest: &Value) -> String {
@@ -604,7 +613,7 @@ pub(crate) mod tests {
         format!("example.test/image@{}", blob["digest"].as_str().unwrap())
     }
 
-    fn image_fixture() -> (tempfile::TempDir, OverlaybdImages, PathBuf, Value) {
+    pub(super) fn image_fixture() -> (tempfile::TempDir, OverlaybdImages, PathBuf, Value) {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source");
         let arch = if cfg!(target_arch = "aarch64") {

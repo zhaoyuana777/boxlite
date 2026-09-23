@@ -94,3 +94,22 @@ Disabled/local runtimes cannot freshly start them. Keep a cloud build available
 to reclaim devices after disabling the opt-in. Blob cache GC, remote lazy pulls
 and automatic daemon recovery are deferred. A changed device number requires
 an atomic qcow2 copy/rebind; filesystems without reflink may incur a disk copy.
+
+## Remote metadata preparation (PR4-A)
+
+The `cloud-runner` Rust build exposes `OverlaybdImages::new(home).pull_metadata(reference,
+registries).await`. It fetches only a digest-pinned single-platform manifest and
+its image config, using the existing registry transport and authentication settings.
+Each metadata body is limited to 4 MiB; authentication and fetching have a combined
+30-second deadline. Layers are not downloaded or marked as fully verified.
+
+The result includes the image config, full layer descriptors and a stable candidate
+`repo_blob_url`. Raw verified manifest/config bytes are atomically published together
+under `<home>/overlaybd/metadata/<manifest-digest-hex>/`. This cache is separate from
+local complete blobs and the ordinary OCI image index. A corrupt existing entry
+fails validation; concurrent identical pulls can reuse the published entry.
+
+This preparation API does not enable remote Box creation, bind an image source or
+change Runner configuration. The Box runtime still uses the PR3 local path above.
+Daemon credentials are independent of Rust metadata credentials; token exchange
+results and temporary redirect URLs are never persisted as the image origin.

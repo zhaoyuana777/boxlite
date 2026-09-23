@@ -6,6 +6,8 @@ mod manager;
 mod object;
 #[cfg(feature = "cloud-runner")]
 pub(crate) mod overlaybd;
+#[cfg(feature = "cloud-runner")]
+pub use overlaybd::{OverlaybdImages, OverlaybdMetadata};
 mod storage;
 mod store;
 

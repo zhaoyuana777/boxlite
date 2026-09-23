@@ -33,6 +33,8 @@ mod rest;
 mod rootfs;
 mod volumes;
 
+#[cfg(feature = "cloud-runner")]
+pub use images::{OverlaybdImages, OverlaybdMetadata};
 pub use litebox::{
     BoxConnection, BoxReader, BoxTunnel, BoxWriter, LiteBox, SocketAddress, TunnelForwarder,
 };
