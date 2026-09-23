@@ -102,6 +102,15 @@ impl BoxliteRuntime {
         )))
     }
 
+    /// Cloud-only remote OverlayBD creation. Metadata uses image_registries;
+    /// layer authentication is supplied independently to the external daemon.
+    #[cfg(feature = "cloud-runner")]
+    pub fn new_cloud_runner_registry(options: BoxliteOptions) -> BoxliteResult<Self> {
+        Ok(Self::from_local(LocalRuntime(
+            RuntimeImpl::new_cloud_runner_registry(options)?,
+        )))
+    }
+
     pub(crate) fn new_with_experimental_features(
         options: BoxliteOptions,
         features: ExperimentalFeatures,

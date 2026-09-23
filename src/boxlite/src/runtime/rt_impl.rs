@@ -264,6 +264,18 @@ impl RuntimeImpl {
         Self::initialize(options, ExperimentalFeatures::default(), Some(manager))
     }
 
+    #[cfg(feature = "cloud-runner")]
+    pub(crate) fn new_cloud_runner_registry(
+        options: BoxliteOptions,
+    ) -> BoxliteResult<SharedRuntimeImpl> {
+        let manager = crate::images::overlaybd::Overlaybd::new_registry(
+            &options.home_dir,
+            options.image_registries.clone(),
+        )?;
+        let _sys = crate::system_check::SystemCheck::run()?;
+        Self::initialize(options, ExperimentalFeatures::default(), Some(manager))
+    }
+
     pub(crate) fn check_rootfs_start(&self, config: &BoxConfig) -> BoxliteResult<()> {
         #[cfg(feature = "cloud-runner")]
         if config.rootfs_backend == RootfsBackend::Overlaybd
@@ -385,7 +397,7 @@ impl RuntimeImpl {
             crate::disk::BaseDiskManager::new(layout.bases_dir(), base_disk_store.clone());
         let snapshot_store = crate::db::SnapshotStore::new(db.clone());
         let snapshot_mgr = crate::litebox::snapshot_mgr::SnapshotManager::new(snapshot_store);
-        let box_store = BoxStore::new(db);
+        let box_store = BoxStore::new(db.clone());
 
         // Initialize lock manager for per-entity multiprocess-safe locking
         let lock_manager: Arc<dyn LockManager> =
@@ -435,6 +447,29 @@ impl RuntimeImpl {
         });
 
         tracing::debug!("initialized runtime");
+
+        #[cfg(feature = "cloud-runner")]
+        if let Some(manager) = &inner.overlaybd {
+            let result = (|| {
+                let references = inner
+                    .box_manager
+                    .all_boxes(true)?
+                    .into_iter()
+                    .filter(|(config, _)| config.rootfs_backend == RootfsBackend::Overlaybd)
+                    .map(|(config, _)| match config.options.rootfs {
+                        crate::runtime::options::RootfsSpec::Image(reference) => Ok(reference),
+                        _ => Err(BoxliteError::Storage(
+                            "OverlayBD box has no image reference".into(),
+                        )),
+                    })
+                    .collect::<BoxliteResult<Vec<_>>>()?;
+                manager.initialize_sources(db.clone(), &references)
+            })();
+            if let Err(error) = result {
+                inner.shutdown_token.cancel();
+                return Err(error);
+            }
+        }
 
         // Recover boxes from database
         inner.recover_boxes()?;
@@ -558,13 +593,7 @@ impl RuntimeImpl {
             && manager.enabled()
             && let crate::runtime::options::RootfsSpec::Image(reference) = &options.rootfs
         {
-            let manager = manager.clone();
-            let reference = reference.clone();
-            tokio::task::spawn_blocking(move || manager.import(&reference))
-                .await
-                .map_err(|e| {
-                    BoxliteError::Internal(format!("OverlayBD image import task failed: {e}"))
-                })??;
+            manager.import_async(reference).await?;
             config.rootfs_backend = RootfsBackend::Overlaybd;
         }
 
@@ -2486,6 +2515,92 @@ mod tests {
                 .rootfs_backend,
             RootfsBackend::Legacy
         );
+    }
+
+    #[cfg(all(feature = "cloud-runner", target_os = "linux"))]
+    #[tokio::test]
+    async fn overlaybd_upgrade_preserves_configured_local_boxes_under_registry_default() {
+        let (fixture, manager, reference) = crate::images::overlaybd::tests::fixture();
+        let options = BoxliteOptions {
+            home_dir: fixture.path().join("runtime"),
+            image_registries: vec![],
+        };
+        let runtime = RuntimeImpl::initialize(
+            options.clone(),
+            ExperimentalFeatures::default(),
+            Some(manager),
+        )
+        .unwrap();
+        let mut box_options = test_box_config(true).options;
+        box_options.rootfs = RootfsSpec::Image(reference.clone());
+        let handle = runtime.create(box_options, None).await.unwrap();
+        let id = handle.id().clone();
+        let db_path = runtime.layout.db_dir().join("boxlite.db");
+        let db = Database::open(&db_path).unwrap();
+        db.conn()
+            .execute_batch("DROP TABLE overlaybd_source; UPDATE schema_version SET version = 10")
+            .unwrap();
+        drop(handle);
+        runtime.shutdown_token.cancel();
+        drop(runtime);
+        let remote =
+            crate::images::overlaybd::Overlaybd::new_registry(&options.home_dir, vec![]).unwrap();
+        let runtime = RuntimeImpl::initialize(
+            options.clone(),
+            ExperimentalFeatures::default(),
+            Some(remote),
+        )
+        .unwrap();
+        let (config, state) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
+        assert_eq!(state.status, BoxStatus::Configured);
+        assert_eq!(config.rootfs_backend, RootfsBackend::Overlaybd);
+        assert!(runtime.check_rootfs_start(&config).is_ok());
+        assert_eq!(
+            db.conn()
+                .query_row("SELECT origin FROM overlaybd_source", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "\"Local\""
+        );
+        runtime.shutdown_token.cancel();
+        drop(runtime);
+        db.conn()
+            .execute("DELETE FROM overlaybd_source", [])
+            .unwrap();
+        let manager =
+            crate::images::overlaybd::Overlaybd::new_registry(&options.home_dir, vec![]).unwrap();
+        assert!(
+            RuntimeImpl::initialize(options, ExperimentalFeatures::default(), Some(manager))
+                .is_err()
+        );
+    }
+
+    #[cfg(feature = "cloud-runner")]
+    #[test]
+    fn overlaybd_missing_source_does_not_stop_surviving_shim() {
+        let (fixture, manager, reference) = crate::images::overlaybd::tests::fixture();
+        let options = BoxliteOptions {
+            home_dir: fixture.path().join("runtime"),
+            image_registries: vec![],
+        };
+        let previous = RuntimeImpl::new_for_test(options.clone()).unwrap();
+        let (pid, child) = spawn_dummy_process();
+        let _child = ChildGuard(child);
+        let mut config = test_box_config_in_layout(false, &previous);
+        config.rootfs_backend = RootfsBackend::Overlaybd;
+        config.options.rootfs = RootfsSpec::Image(reference);
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Running;
+        state.pid = Some(pid);
+        state.set_lock_id(previous.lock_manager.allocate().unwrap());
+        previous.box_manager.add_box(&config, &state).unwrap();
+        previous.shutdown_token.cancel();
+        drop(previous);
+        assert!(
+            RuntimeImpl::initialize(options, ExperimentalFeatures::default(), Some(manager))
+                .is_err()
+        );
+        assert!(crate::util::is_process_alive(pid));
     }
 
     #[cfg(feature = "cloud-runner")]

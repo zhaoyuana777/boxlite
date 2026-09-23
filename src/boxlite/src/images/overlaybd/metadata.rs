@@ -174,4 +174,4 @@ fn cache_metadata(root: &Path, digest: &str, manifest: &[u8], config: &[u8]) -> 
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

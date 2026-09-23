@@ -7,7 +7,7 @@
 //! Each table has queryable columns for efficient filtering + JSON blob for full data.
 
 /// Current schema version.
-pub const SCHEMA_VERSION: i32 = 10;
+pub const SCHEMA_VERSION: i32 = 11;
 
 /// Schema version tracking table.
 pub const SCHEMA_VERSION_TABLE: &str = r#"
@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS box_config (
 
 CREATE INDEX IF NOT EXISTS idx_box_config_created_at ON box_config(created_at);
 CREATE INDEX IF NOT EXISTS idx_box_config_name ON box_config(name);
+"#;
+
+/// One durable origin per OverlayBD manifest; NULL denotes an unverified PR3 import.
+pub(crate) const OVERLAYBD_SOURCE_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS overlaybd_source (
+    digest TEXT PRIMARY KEY NOT NULL,
+    origin TEXT
+);
 "#;
 
 /// BoxState table schema.
@@ -155,6 +163,7 @@ pub fn all_schemas() -> Vec<&'static str> {
     vec![
         SCHEMA_VERSION_TABLE,
         BOX_CONFIG_TABLE,
+        OVERLAYBD_SOURCE_TABLE,
         BOX_STATE_TABLE,
         ALIVE_TABLE,
         IMAGE_INDEX_TABLE,

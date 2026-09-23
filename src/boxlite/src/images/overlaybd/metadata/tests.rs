@@ -22,7 +22,7 @@ impl Response {
     }
 }
 
-struct Registry {
+pub(in crate::images::overlaybd) struct Registry {
     host: String,
     routes: Arc<Mutex<BTreeMap<String, Response>>>,
     paths: Arc<Mutex<Vec<String>>>,
@@ -36,7 +36,7 @@ impl Drop for Registry {
 }
 
 impl Registry {
-    async fn new(authorization: Option<String>) -> Self {
+    pub(in crate::images::overlaybd) async fn new(authorization: Option<String>) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let host = listener.local_addr().unwrap().to_string();
         let routes = Arc::new(Mutex::new(BTreeMap::<String, Response>::new()));
@@ -105,7 +105,7 @@ impl Registry {
         }
     }
 
-    fn image(&self, source: &Path, manifest: &Value) -> String {
+    pub(in crate::images::overlaybd) fn image(&self, source: &Path, manifest: &Value) -> String {
         let raw = serde_json::to_vec(manifest).unwrap();
         let digest = format!("sha256:{}", hex::encode(Sha256::digest(&raw)));
         self.routes
@@ -146,7 +146,7 @@ impl Registry {
         failure.to_string()
     }
 
-    fn options(&self) -> Vec<ImageRegistry> {
+    pub(in crate::images::overlaybd) fn options(&self) -> Vec<ImageRegistry> {
         vec![ImageRegistry::http(&self.host)]
     }
 }

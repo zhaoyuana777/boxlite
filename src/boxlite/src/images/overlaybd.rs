@@ -1,6 +1,7 @@
 //! Verified OverlayBD images, isolated from the ordinary OCI image cache.
 
 mod metadata;
+mod source;
 pub use metadata::OverlaybdMetadata;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -246,9 +247,15 @@ struct Device {
     state: String,
 }
 
+enum ImageSource {
+    Local(PathBuf),
+    Registry(Vec<crate::runtime::options::ImageRegistry>),
+}
+
 pub(crate) struct Overlaybd {
     images: OverlaybdImages,
-    source: Option<PathBuf>,
+    source: Option<ImageSource>,
+    db: Mutex<Option<crate::db::Database>>,
     socket: PathBuf,
     // ponytail: serialize device transitions; split per image if startup throughput requires it.
     users: Mutex<BTreeMap<String, BTreeSet<String>>>,
@@ -292,7 +299,8 @@ impl Overlaybd {
         }
         Ok(Arc::new(Self {
             images: OverlaybdImages::new(home),
-            source,
+            source: source.map(ImageSource::Local),
+            db: Mutex::new(None),
             socket: SOCKET.into(),
             users: Mutex::new(BTreeMap::new()),
         }))
@@ -303,11 +311,30 @@ impl Overlaybd {
     }
 
     pub(crate) fn import(&self, reference: &str) -> BoxliteResult<()> {
-        let source = self
-            .source
-            .as_ref()
-            .ok_or_else(|| error("backend is disabled"))?;
-        self.images.import(source, reference).map(|_| ())
+        let Some(ImageSource::Local(source)) = &self.source else {
+            return Err(error("local import backend is disabled"));
+        };
+        self.images.import(source, reference)?;
+        self.bind_source(image_digest(reference)?, &source::Origin::Local)
+    }
+
+    pub(crate) async fn import_async(self: &Arc<Self>, reference: &str) -> BoxliteResult<()> {
+        let origin = match &self.source {
+            Some(ImageSource::Registry(registries)) => {
+                let metadata = self.images.pull_metadata(reference, registries).await?;
+                source::Origin::Registry(metadata.repo_blob_url)
+            }
+            _ => {
+                let (manager, reference) = (self.clone(), reference.to_owned());
+                return tokio::task::spawn_blocking(move || manager.import(&reference))
+                    .await
+                    .map_err(error)?;
+            }
+        };
+        let (manager, reference) = (self.clone(), reference.to_owned());
+        tokio::task::spawn_blocking(move || manager.bind_source(image_digest(&reference)?, &origin))
+            .await
+            .map_err(error)?
     }
 
     fn config_path(&self, digest: &str) -> PathBuf {
@@ -441,26 +468,22 @@ impl Overlaybd {
             ));
         }
         let digest = image_digest(reference)?;
-        let (config, layers) = self.images.import_image(&self.images.root, reference)?;
-        let lowers: Vec<_> = layers.iter().map(|path| json!({"file": path})).collect();
+        let (config, lower) = self.lower(reference, &self.read_source(digest)?)?;
         let path = self.config_path(digest);
         fs::create_dir_all(path.parent().unwrap()).map_err(error)?;
-        if !path.exists() {
-            let mut staged =
-                tempfile::NamedTempFile::new_in(path.parent().unwrap()).map_err(error)?;
-            serde_json::to_writer(&mut staged, &json!({"lowers": lowers})).map_err(error)?;
-            staged.as_file().sync_all().map_err(error)?;
-            match staged.persist_noclobber(&path) {
-                Ok(_) => {}
-                Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(error(e)),
+        let mut staged = tempfile::NamedTempFile::new_in(path.parent().unwrap()).map_err(error)?;
+        serde_json::to_writer(&mut staged, &lower).map_err(error)?;
+        staged.as_file().sync_all().map_err(error)?;
+        match staged.persist_noclobber(&path) {
+            Ok(_) => {
+                File::open(path.parent().unwrap())
+                    .and_then(|f| f.sync_all())
+                    .map_err(error)?;
             }
-        } else {
-            let stored: Value = serde_json::from_slice(&read_bounded(&path)?).map_err(error)?;
-            if stored != json!({"lowers": lowers}) {
-                return Err(error("persisted device config differs from pinned image"));
-            }
+            Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(error(e)),
         }
+        self.check_lower(&path, &lower)?;
         let (device, lease) = self.acquire(box_id, digest)?;
         let capacity = device_capacity(&device)?;
         let disk = prepare_cow(disk_path, &device, capacity, size_gb)?;
@@ -887,7 +910,10 @@ pub(crate) mod tests {
         let reference = pin(&source, &manifest);
         let manager = Arc::new(Overlaybd {
             images,
-            source: Some(source),
+            source: Some(ImageSource::Local(source)),
+            db: Mutex::new(Some(
+                crate::db::Database::open(&dir.path().join("test.db")).unwrap(),
+            )),
             socket: dir.path().join("daemon.sock"),
             users: Mutex::new(BTreeMap::new()),
         });
